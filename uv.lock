@@ -6,6 +6,9 @@ requires-python = ">=3.10"
 name = "agent-team-exercise"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "python-dotenv" },
+]
 
 [package.optional-dependencies]
 dotenv = [
@@ -13,7 +16,10 @@ dotenv = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "python-dotenv", marker = "extra == 'dotenv'", specifier = ">=1.0.0" }]
+requires-dist = [
+    { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "python-dotenv", marker = "extra == 'dotenv'", specifier = ">=1.0.0" },
+]
 provides-extras = ["dotenv"]
 
 [package.metadata.requires-dev]

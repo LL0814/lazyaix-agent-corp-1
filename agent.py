@@ -59,6 +59,9 @@ except ImportError:
     class Tool:  # Stub
         """Tool stub: simulates executing an external action."""
 
+        def __init__(self, model=None):
+            self.model = model
+
         def execute(self, action, params):
             """Execute the requested action with parameters."""
             return f"[STUB] Executed {action} with {params}"
@@ -91,7 +94,10 @@ except ImportError:
     class Subagent:  # Stub
         """Subagent stub: simulates dispatching work to a sub-agent."""
 
-        def dispatch(self, task_description):
+        def __init__(self, model=None):
+            self.model = model
+
+        def dispatch(self, agent_name, task_description):
             """Dispatch a task to a sub-agent and return a placeholder result."""
             return f"[STUB] Subagent handled task: {task_description}"
 
@@ -112,8 +118,8 @@ class Agent:
         self.config = Config()
         self.model = Model()
         self.skill = Skill()
-        self.tool = Tool()
-        self.subagent = Subagent()
+        self.tool = Tool(self.model)
+        self.subagent = Subagent(self.model)
 
     @property
     def name(self):

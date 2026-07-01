@@ -1,7 +1,9 @@
 """Subagent coordinator.
 
 Exposes the `Subagent` class used by the main Agent to dispatch synchronous
-tasks to specialized workers (researcher, writer).
+tasks to specialized workers (researcher, writer). The coordinator receives
+a `model` instance from the Agent and injects it into each worker so that
+workers can call the LLM.
 """
 
 from .workers import Researcher, Writer
@@ -10,10 +12,11 @@ from .workers import Researcher, Writer
 class Subagent:
     """Coordinator that dispatches tasks to synchronous worker agents."""
 
-    def __init__(self):
+    def __init__(self, model=None):
+        self.model = model
         self.workers = {
-            "researcher": Researcher(),
-            "writer": Writer(),
+            "researcher": Researcher(model),
+            "writer": Writer(model),
         }
 
     def dispatch(self, agent_name: str, task_description: str) -> str:

@@ -1,8 +1,9 @@
 """Tool module.
 
 Implements the `Tool` class used by the main Agent to execute external
-actions. Registers a built-in `task` action that forwards work to the
-Subagent coordinator.
+actions. Registers a built-in `task` tool that forwards work to the
+Subagent coordinator. The Tool receives a `model` instance from the Agent
+and passes it to the Subagent so that subagents can call the LLM.
 """
 
 try:
@@ -11,6 +12,9 @@ except ImportError:  # pragma: no cover - stub fallback
     class Subagent:
         """Stub Subagent used when the real module is not available."""
 
+        def __init__(self, model=None):
+            self.model = model
+
         def dispatch(self, agent_name: str, task_description: str) -> str:
             return f"[STUB] Subagent handled task: {task_description}"
 
@@ -18,8 +22,8 @@ except ImportError:  # pragma: no cover - stub fallback
 class Tool:
     """Tool executor with a built-in `task` action for Subagent dispatch."""
 
-    def __init__(self):
-        self.subagent = Subagent()
+    def __init__(self, model=None):
+        self.subagent = Subagent(model)
 
     def execute(self, action, params):
         """Execute the requested action with parameters.
