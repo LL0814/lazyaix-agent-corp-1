@@ -30,22 +30,20 @@ class Context:
         self._turn_counter = 0
 
     def _estimate_tokens(self) -> int:
-        """Estimate tokens from recent turn previews and tool call results."""
+        """Estimate tokens from the full content length of recent turns."""
         total_chars = 0
         for turn in self._state.recent_turns:
-            total_chars += len(turn.content_preview or "")
-            for tool_call in turn.tool_calls or []:
-                total_chars += len(tool_call.result_preview or "")
+            total_chars += turn.content_length
         return ceil(total_chars / 4)
 
     def _compute_token_stats(self) -> TokenStats:
         """Compute current token usage statistics."""
         estimated = self._estimate_tokens()
-        usage_pct = estimated / self.context_limit if self.context_limit > 0 else 0.0
+        usage_pct = (estimated / self.context_limit * 100) if self.context_limit > 0 else 0.0
 
-        if usage_pct >= 1.0:
+        if usage_pct >= 100.0:
             warning_level = "critical"
-        elif usage_pct >= 0.8:
+        elif usage_pct >= 80.0:
             warning_level = "high"
         else:
             warning_level = "ok"
@@ -96,6 +94,7 @@ class Context:
             turn_id=self._turn_counter,
             role="user",
             content_preview=user_input[:120],
+            content_length=len(user_input),
             timestamp=datetime.now(),
         )
         self._state.recent_turns.append(turn)
@@ -126,6 +125,7 @@ class Context:
                 turn_id=self._turn_counter,
                 role="tool",
                 content_preview=result_preview[:120],
+                content_length=len(result_preview),
                 tool_calls=[tool_call],
                 timestamp=datetime.now(),
             )
@@ -135,6 +135,7 @@ class Context:
                 turn_id=self._turn_counter,
                 role="assistant",
                 content_preview=text[:120],
+                content_length=len(text),
                 timestamp=datetime.now(),
             )
 
