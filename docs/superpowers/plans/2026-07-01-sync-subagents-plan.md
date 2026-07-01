@@ -2,16 +2,28 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 `agent-team-exercise` 骨架中实现两个同步 Subagent（`researcher` 和 `writer`），并通过内置 `task` 工具让主 Agent（Supervisor）按需委派任务、同步等待结果并返回给用户。本次迭代要求 **Subagent 调用 LLM 完成子任务**；为便于临时测试，在 `models/__init__.py` 中实现一个基于 `urllib` 的 OpenAI 兼容客户端，通过 `.env` 配置阿里云 DashScope（或其他兼容服务），未配置时自动回退 Stub。
+**Goal:** 在 `agent-team-exercise` 骨架中实现完整的 Supervisor-Subagent 工作流：
+1. 用户输入任务。
+2. 主 Agent（Supervisor）调用 LLM 分析任务，决定直接回答或委派给 Subagent。
+3. 如需委派，Supervisor 生成规划 `{"action": "delegate", "tasks": [...]}`，可选择一个或两个 Subagent。
+4. 主 Agent 依次调用每个 Subagent。
+5. 每个 Subagent 调用 LLM 完成子任务并返回结果。
+6. 主 Agent（Supervisor）再次调用 LLM，基于所有 Subagent 结果生成最终回复并返回给用户。
+
+为便于临时测试，在 `models/__init__.py` 中实现一个基于 `urllib` 的 OpenAI 兼容客户端，通过 `.env` 配置阿里云 DashScope（或其他兼容服务），未配置时自动回退 Stub。
 
 **Architecture:**
 - `models/__init__.py` 实现 `Model` 类：读取 `MODEL_BASE_URL`、`MODEL_API_KEY`、`MODEL_NAME`，配置完整时调用真实 LLM，否则回退 Stub。
 - `subagents/` 模块暴露 `Subagent` 类，内部维护 `Researcher` 和 `Writer` 两个 worker。
 - Agent 在 `__init__()` 中创建唯一的 `Model` 实例，并将其注入 `Tool` 与 `Subagent`。
-- `Subagent` 及其 workers 均持有 `model` 引用；worker 的 `run(description)` 构造角色化 prompt 后调用 `self.model.complete(prompt)`。
+- `Subagent` 及其 workers 均持有 `model` 引用；worker 的 `run(description)` 构造角色化 prompt 后调用 `self.model.complete(prompt)`，返回结果前保留身份前缀。
 - `tools/` 模块注册 `task` 工具，`Tool.execute("task", {"agent": "...", "description": "..."})` 调用 `Subagent.dispatch()`。
-- `skills/` 模块通过关键词判断是否需要委派，返回 `{"action": "tool", "tool": "task", "params": {...}}`。
-- `agent.py` 的 `process_turn()` 在 `action == "tool"` 时调用 `Tool.execute()`，并把结果返回给用户。
+- `skills/` 模块作为 Supervisor planning 失败时的规则路由 fallback。
+- `agent.py` 实现 Supervisor：
+  - `_plan()`：调用 LLM 生成 JSON 决策，支持 `"tasks": [...]` 多任务。
+  - `_parse_plan()`：解析 JSON，兼容单 agent 旧格式。
+  - `_summarize()`：调用 LLM 基于多个 Subagent 结果生成最终回复。
+  - `process_turn()`：orchestrate 规划 → 依次委派 → 汇总 → 回复。
 - 所有模块均遵循现有骨架的“真实实现优先、缺失时回退 Stub”的约定。
 
 **Tech Stack:** Python 3（uv 管理），仅使用标准库 `urllib`，无额外依赖。
@@ -24,10 +36,10 @@
 |------|----------------|
 | `models/__init__.py` | 实现 `Model` 类：OpenAI 兼容客户端，可回退 Stub |
 | `subagents/__init__.py` | 暴露 `Subagent` 类，接收 model 并提供 `dispatch()` / `task()` 入口 |
-| `subagents/workers.py` | 实现 `Researcher` 和 `Writer`，调用 `model.complete()` 生成结果 |
+| `subagents/workers.py` | 实现 `Researcher` 和 `Writer`，调用 `model.complete()` 生成结果并加前缀 |
 | `tools/__init__.py` | 实现 `Tool` 类，接收 model 并注册 `task` 工具 |
-| `skills/__init__.py` | 实现 `Skill` 类，判断何时委派给 Subagent |
-| `agent.py` | 调整组装顺序：先创建 Model，再将其注入 Tool 和 Subagent |
+| `skills/__init__.py` | 实现 `Skill` 类，作为 planning 失败时的 fallback |
+| `agent.py` | 实现 Supervisor：`_plan()`、`_parse_plan()`、`_summarize()`、更新 `process_turn()` |
 | `.env.example` | 增加 `MODEL_BASE_URL`、`MODEL_API_KEY`、`MODEL_NAME` 示例 |
 
 ---
@@ -123,7 +135,7 @@
 
 ---
 
-## Task 1: 让 Subagent workers 调用 LLM
+## Task 1: 让 Subagent workers 调用 LLM 并保留身份前缀
 
 **Files:**
 - Modify: `subagents/workers.py`
@@ -134,8 +146,8 @@
   内容要求：
   - `Researcher` 和 `Writer` 均增加 `__init__(self, model=None)`，保存 model 引用。
   - `run(self, description: str) -> str` 中：
-    - 若 `self.model` 为 None，回退到格式化字符串，保证独立测试不崩溃。
-    - 否则构造角色化 prompt 并调用 `self.model.complete(prompt)` 返回结果。
+    - 若 `self.model` 为 None，回退到格式化字符串（已带前缀），保证独立测试不崩溃。
+    - 否则构造角色化 prompt，调用 `self.model.complete(prompt)`，给结果加上身份前缀后返回。
 
   预期代码结构：
   ```python
@@ -146,8 +158,13 @@
       def run(self, description: str) -> str:
           if self.model is None:
               return f"[Researcher] Completed research: {description}"
-          prompt = f"You are a research assistant. Please research and summarize the following topic concisely:\n\n{description}"
-          return self.model.complete(prompt)
+          prompt = (
+              "You are a research assistant. Please research and summarize "
+              "the following topic concisely:\n\n"
+              f"{description}"
+          )
+          result = self.model.complete(prompt)
+          return f"[Researcher] Completed research: {result}"
 
   class Writer:
       def __init__(self, model=None):
@@ -156,8 +173,13 @@
       def run(self, description: str) -> str:
           if self.model is None:
               return f"[Writer] Completed writing task: {description}"
-          prompt = f"You are a writing assistant. Please write content based on the following request:\n\n{description}"
-          return self.model.complete(prompt)
+          prompt = (
+              "You are a writing assistant. Please write content based on "
+              "the following request:\n\n"
+              f"{description}"
+          )
+          result = self.model.complete(prompt)
+          return f"[Writer] Completed writing task: {result}"
   ```
 
 - [ ] **Step 2: 修改 `subagents/__init__.py`**
@@ -252,10 +274,10 @@
 
 ---
 
-## Task 3: 确认 Skill 路由（无需改动）
+## Task 3: 调整 Skill 为 fallback
 
 **Files:**
-- Read: `skills/__init__.py`
+- Read/Optional modify: `skills/__init__.py`
 
 - [ ] **Step 1: 确认 Skill 仍按关键词返回 task 工具决策**
 
@@ -263,7 +285,7 @@
   - “研究/分析/总结/复杂/长/...” → `researcher`
   - “写/文章/文案/创作/博客/...” → `writer`
 
-  若 keywords 需要调整可在此步修改，否则直接验收。
+  在新流程中，Skill 不再作为默认路由，仅在 Supervisor planning JSON 解析失败时调用。保持现有实现即可。
 
 - [ ] **Step 2: 验证 Skill 路由决策**
 
@@ -279,7 +301,7 @@
 
 ---
 
-## Task 4: 调整 agent.py，将 Model 注入 Tool 和 Subagent
+## Task 4: 在 agent.py 中实现 Supervisor 规划与汇总（支持多 Subagent）
 
 **Files:**
 - Modify: `agent.py`
@@ -308,16 +330,195 @@
   - `Tool` Stub：`def __init__(self, model=None):`
   - `Subagent` Stub：`def __init__(self, model=None):` 和 `def dispatch(self, agent_name, task_description):`
 
-- [ ] **Step 2: 验证 Agent 能完整走通 Subagent 路径（未配置 LLM 时）**
+- [ ] **Step 2: 新增 `_plan()` 方法**
+
+  内容要求：
+  - 构造 Supervisor planning prompt，说明有两个 subagent：researcher 和 writer。
+  - 要求 LLM 输出 JSON，格式如下：
+    ```json
+    {"action": "direct", "response": "直接回复用户的内容"}
+    ```
+    或
+    ```json
+    {"action": "delegate", "tasks": [{"agent": "researcher|writer", "description": "..."}, ...]}
+    ```
+  - 强调 Supervisor 可以根据任务复杂度决定用一个或两个 Subagent。
+  - 调用 `self.model.complete(prompt)` 获取文本。
+  - 调用 `_parse_plan()` 解析。
+  - 若解析失败或字段缺失，调用 `self.skill.decide()` 作为 fallback，并把 Skill 返回的 `{"action": "tool", "tool": "task", "params": ...}` 转换为 `{"action": "delegate", "tasks": [{...}]}` 形式。
+
+  预期代码结构：
+  ```python
+  def _plan(self, user_input, context, memory):
+      prompt = (
+          "You are a supervisor agent. You have two subagents:\n"
+          "- researcher: good at research, analysis, and summarization\n"
+          "- writer: good at writing, copywriting, and content generation\n\n"
+          "Based on the user's request, decide whether to answer directly or "
+          "delegate to one or more subagents. You may delegate to a single "
+          "subagent or both if the task benefits from both research and writing.\n\n"
+          "Respond with a JSON object in one of these two forms:\n"
+          '{"action": "direct", "response": "your direct answer to the user"}\n'
+          'or\n'
+          '{"action": "delegate", "tasks": [{"agent": "researcher|writer", "description": "task description"}, ...]}\n\n'
+          f"User request: {user_input}\n"
+          "Decision:"
+      )
+      raw = self.model.complete(prompt)
+      decision = self._parse_plan(raw)
+      if decision is None:
+          skill_decision = self.skill.decide(user_input, raw, context, memory)
+          if (
+              skill_decision.get("action") == "tool"
+              and skill_decision.get("tool") == "task"
+          ):
+              return {
+                  "action": "delegate",
+                  "tasks": [
+                      {
+                          "agent": skill_decision["params"]["agent"],
+                          "description": skill_decision["params"]["description"],
+                      }
+                  ],
+              }
+          return {"action": "direct", "response": raw}
+      return decision
+  ```
+
+- [ ] **Step 3: 新增 `_parse_plan()` 辅助方法**
+
+  内容要求：
+  - 从 LLM 返回的文本中提取 JSON 对象。
+  - 先尝试直接 `json.loads(raw)`。
+  - 失败时尝试用正则提取第一个 `{...}` 块。
+  - 验证必要字段：
+    - `action == "direct"` 时需要有 `response`
+    - `action == "delegate"` 时需要有 `tasks` 数组（每个元素有 `agent` 和 `description`）
+  - 兼容旧版单 agent 格式 `{"action": "delegate", "agent": ..., "description": ...}`，自动转换为 tasks 数组。
+  - 返回解析后的 dict 或 None。
+
+  预期代码结构：
+  ```python
+  import json
+  import re
+
+  def _parse_plan(self, raw: str):
+      raw = raw.strip()
+      try:
+          decision = json.loads(raw)
+      except json.JSONDecodeError:
+          match = re.search(r"\{.*\}", raw, re.DOTALL)
+          if not match:
+              return None
+          try:
+              decision = json.loads(match.group(0))
+          except json.JSONDecodeError:
+              return None
+
+      # Backward compatibility: single-agent format -> tasks array
+      if decision.get("action") == "delegate" and "agent" in decision:
+          decision["tasks"] = [
+              {
+                  "agent": decision["agent"],
+                  "description": decision.get("description", ""),
+              }
+          ]
+
+      action = decision.get("action")
+      if action == "direct" and "response" in decision:
+          return decision
+      if action == "delegate":
+          tasks = decision.get("tasks", [])
+          if isinstance(tasks, list) and all(
+              "agent" in t and "description" in t for t in tasks
+          ):
+              return decision
+      return None
+  ```
+
+- [ ] **Step 4: 新增 `_summarize()` 方法**
+
+  内容要求：
+  - 构造 Supervisor summarization prompt，传入原始用户请求、所有 Subagent 的结果列表。
+  - 在 prompt 中明确要求模型在最终回复开头说明使用了哪些 Subagent。
+  - 调用 `self.model.complete(prompt)` 并返回结果。
+
+  预期代码结构：
+  ```python
+  def _summarize(self, user_input, results, context, memory):
+      prompt = (
+          "You are a supervisor agent. You delegated tasks to one or more "
+          "subagents and received the following results.\n\n"
+          f"User request: {user_input}\n\n"
+          "Subagent results:\n"
+      )
+      for item in results:
+          prompt += f"- [{item['agent']}] {item['result']}\n"
+      prompt += (
+          "\nPlease synthesize these results into a final, natural, and "
+          "helpful response for the user. Start your response by briefly "
+          "mentioning which subagents you used, for example: "
+          "'I used the researcher and writer subagents to help with this.' "
+          "Then provide the synthesized answer."
+      )
+      return self.model.complete(prompt)
+  ```
+
+- [ ] **Step 5: 重写 `process_turn()`**
+
+  新流程：
+  1. 更新 context（可选）。
+  2. 调用 `_plan()` 获取决策。
+  3. 若 `action == "direct"`，`result = plan["response"]`。
+  4. 若 `action == "delegate"`：
+     - 遍历 `plan["tasks"]`，对每个 task 调用 `self.tool.execute("task", {"agent": task["agent"], "description": task["description"]})`
+     - 收集 `{"agent": task["agent"], "result": agent_result}` 到 `results` 列表
+     - 拼接固定前缀 `[使用了子agent: xxx, yyy]`，确保用户一定能看到使用了哪些 Subagent
+     - `result = prefix + self._summarize(user_input, results, context, memory)`
+  5. 写入 memory（可选）。
+  6. 返回 `result`。
+
+  预期代码结构：
+  ```python
+  def process_turn(self, user_input: str) -> str:
+      if self._context_enabled():
+          self.context.update(user_input)
+
+      plan = self._plan(user_input, self.context.get(), self.memory)
+
+      if plan.get("action") == "delegate":
+          results = []
+          for task in plan.get("tasks", []):
+              agent_result = self.tool.execute(
+                  "task",
+                  {"agent": task["agent"], "description": task["description"]},
+              )
+              results.append({"agent": task["agent"], "result": agent_result})
+          used_agents = ", ".join(r["agent"] for r in results)
+          prefix = f"[使用了子agent: {used_agents}]\n\n"
+          summary = self._summarize(
+              user_input, results, self.context.get(), self.memory
+          )
+          result = prefix + summary
+      else:
+          result = plan.get("response", "")
+
+      if self._memory_enabled():
+          self._remember(user_input, result)
+
+      return str(result)
+  ```
+
+- [ ] **Step 6: 验证 Agent 能完整走通 Supervisor 路径（未配置 LLM 时）**
 
   Run:
   ```bash
   printf '帮我研究一下 AI 趋势\nquit\n' | python3 loop.py
   ```
-  Expected output contains：
+  Expected output contains（当前为 Stub LLM 输出，能看到 planning 和 summarization 被调用）：
   ```
   Agent is ready. Type 'exit' or 'quit' to stop.
-  > [stub-llm] You are a research assistant. Please research and summarize ...
+  > [stub-llm] You are a supervisor agent. You delegated ...
   > Goodbye.
   ```
 
@@ -329,7 +530,7 @@
 - Test: `loop.py`
 - Test: `.env`（用户自行配置真实 key 后）
 
-- [ ] **Step 1: 未配置 .env 时，验证 researcher 和 writer 两条路径均调用 Stub LLM**
+- [ ] **Step 1: 未配置 .env 时，验证 Supervisor 规划 + 多 Subagent 执行 + 汇总链路**
 
   Run:
   ```bash
@@ -337,11 +538,11 @@
   ```
   Expected output contains：
   ```
-  [stub-llm] You are a research assistant. Please research and summarize ...
-  [stub-llm] You are a writing assistant. Please write content based on ...
+  [stub-llm] You are a supervisor agent. You delegated ...
   ```
+  （Stub 模式下具体输出取决于 prompt 内容，但应能观察到 Supervisor 被调用。）
 
-- [ ] **Step 2: 配置 .env 后，验证 Subagent 调用真实 LLM**
+- [ ] **Step 2: 配置 .env 后，验证真实 LLM 的 Supervisor-Subagent 闭环**
 
   用户操作：
   ```bash
@@ -351,9 +552,19 @@
 
   Run:
   ```bash
-  printf '帮我研究一下市场趋势\n写一篇文章\nquit\n' | uv run loop.py
+  printf '帮我研究一下市场趋势，并写成一篇文章\nquit\n' | uv run loop.py
   ```
-  Expected: 输出为阿里云模型的真实生成内容（不再是 `[stub-llm]` 前缀）。
+  Expected:
+  - Supervisor 可能同时委派 researcher 和 writer。
+  - 两个 Subagent 依次执行，结果带前缀。
+  - 最终回复开头有固定前缀 `[使用了子agent: researcher, writer]`。
+  - Supervisor 汇总两个结果，生成最终文章。
+
+  也可分别测试单 Subagent：
+  ```bash
+  printf '帮我研究一下 AI 趋势\nquit\n' | uv run loop.py
+  printf '写一篇文章\nquit\n' | uv run loop.py
+  ```
 
 - [ ] **Step 3: 验证普通输入仍走直接回答路径**
 
@@ -361,7 +572,7 @@
   ```bash
   printf '你好\nquit\n' | uv run loop.py
   ```
-  Expected output contains 直接回答（当前为 LLM Stub 返回的 echo 文本）。
+  Expected output contains 直接回答（由 Supervisor planning 的 `direct` 分支返回）。
 
 - [ ] **Step 4: 验证删除/未实现子模块时骨架仍可运行**
 
@@ -379,8 +590,8 @@
 - 临时 Model 模块实现：Task 0。
 - 两个同步 Subagent 实现并调用 LLM：Task 1。
 - `task` 工具暴露并传递 model：Task 2。
-- 主 Agent 通过 Skill 判断并委派：Task 3。
-- 主 Agent 将 Model 注入 Tool/Subagent：Task 4。
+- Skill 作为 planning fallback：Task 3。
+- Supervisor planning / multi-agent delegation / summarization 实现：Task 4。
 - 端到端可运行，支持真实/Stub 两种模式：Task 5。
 
 **Placeholder scan:** 无 TBD/TODO 等未定义占位符。
