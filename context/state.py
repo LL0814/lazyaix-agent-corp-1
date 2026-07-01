@@ -20,6 +20,10 @@ class Context:
             warnings.warn("Invalid CONTEXT_LIMIT; falling back to 4000")
             self.context_limit = 4000
 
+        if self.context_limit <= 0:
+            warnings.warn("CONTEXT_LIMIT must be positive; falling back to 4000")
+            self.context_limit = 4000
+
         try:
             self.max_recent_turns = int(config.get("MAX_RECENT_TURNS", 5))
         except (ValueError, TypeError):
@@ -34,15 +38,13 @@ class Context:
         self._turn_counter = 0
 
     def _estimate_tokens(self) -> int:
-        """Estimate tokens from all recent turns' full content length.
+        """Estimate tokens from recent turns' content previews.
 
-        Each stored turn already includes the full length of its content (including
-        tool result previews), so we sum those lengths and divide by an approximate
+        Each stored turn exposes a truncated content preview (at most 120
+        characters), so we sum those lengths and divide by an approximate
         characters-per-token ratio.
         """
-        total_chars = 0
-        for turn in self._state.recent_turns:
-            total_chars += turn.content_length
+        total_chars = sum(len(turn.content_preview) for turn in self._state.recent_turns)
         return ceil(total_chars / 4)
 
     def _compute_token_stats(self) -> TokenStats:
@@ -103,7 +105,6 @@ class Context:
             turn_id=self._turn_counter,
             role="user",
             content_preview=user_input[:120],
-            content_length=len(user_input),
             timestamp=datetime.now(),
         )
         self._state.recent_turns.append(turn)
@@ -134,7 +135,6 @@ class Context:
                 turn_id=self._turn_counter,
                 role="tool",
                 content_preview=result_preview[:120],
-                content_length=len(result_preview),
                 tool_calls=[tool_call],
                 timestamp=datetime.now(),
             )
@@ -144,7 +144,6 @@ class Context:
                 turn_id=self._turn_counter,
                 role="assistant",
                 content_preview=text[:120],
-                content_length=len(text),
                 timestamp=datetime.now(),
             )
 

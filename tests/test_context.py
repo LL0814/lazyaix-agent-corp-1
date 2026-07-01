@@ -54,6 +54,7 @@ def test_topic_inference_file_edit():
 def test_token_estimation_and_warning_level():
     ctx = Context(config={"CONTEXT_LIMIT": 100})
     long_input = "x" * 400
+    ctx.update(long_input)
     state = ctx.update(long_input)
 
     assert state.token_stats.usage_pct >= 50
@@ -112,7 +113,6 @@ def test_update_empty_input():
     turn = state.recent_turns[0]
     assert turn.role == "user"
     assert turn.content_preview == ""
-    assert turn.content_length == 0
 
 
 def test_get_before_update_returns_defaults():
@@ -155,6 +155,55 @@ def test_non_positive_max_recent_turns_fallback():
         ctx = Context(config={"MAX_RECENT_TURNS": -3})
 
     assert ctx.max_recent_turns == 5
+
+
+def test_non_positive_context_limit_fallback():
+    with pytest.warns(UserWarning, match="CONTEXT_LIMIT must be positive"):
+        ctx = Context(config={"CONTEXT_LIMIT": 0})
+
+    assert ctx.context_limit == 4000
+    state = ctx.update("hello")
+    assert state.token_stats.context_limit == 4000
+
+
+def test_tool_turn_contributes_to_token_estimate():
+    ctx = Context()
+    user_input = "what is the weather?"
+    ctx.update(user_input)
+    tool_preview = "sunny and 75 degrees"
+    state = ctx.update_with_result(
+        {"tool_name": "weather", "params": {"city": "Beijing"}, "result_preview": tool_preview}
+    )
+
+    expected_chars = len(user_input[:120]) + len(tool_preview[:120])
+    expected_tokens = (expected_chars + 3) // 4  # ceil without math import
+    assert state.token_stats.estimated_tokens == expected_tokens
+
+
+def test_agent_process_turn_integration():
+    from agent import Agent
+
+    class MemoryStub:
+        def __init__(self):
+            self._data = {}
+
+        def store(self, key, value):
+            self._data[key] = value
+
+        def retrieve(self, key):
+            return self._data.get(key)
+
+    context = Context()
+    memory = MemoryStub()
+    agent = Agent(context=context, memory=memory)
+
+    response = agent.process_turn("what is the weather in Beijing")
+
+    assert response
+    data = context.get()
+    assert isinstance(data, dict)
+    assert data["topic"]["primary_topic"] == "weather"
+    assert len(data["recent_turns"]) >= 1
 
 
 def test_snapshot_deep_copy_isolated():

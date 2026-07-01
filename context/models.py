@@ -20,7 +20,6 @@ class TurnSummary(BaseModel):
     turn_id: int
     role: Literal["user", "assistant", "tool"]
     content_preview: str
-    content_length: int = 0
     tool_calls: list[ToolCallRecord] | None = None
     timestamp: datetime
 
