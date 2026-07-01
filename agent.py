@@ -129,20 +129,38 @@ class Agent:
     def _build_prompt(self, user_input):
         """Build the prompt sent to the model.
 
-        Memory is included only when ENABLE_MEMORY is true.
+        在调用 LLM 之前，先从 memory.json 中检索历史对话记忆和其它存储项，
+        并拼接进提示词。仅在 ENABLE_MEMORY=true 时生效。
         """
         if not self._memory_enabled():
             return user_input
+
+        parts = []
+
+        # 1) 通用记忆（除 history 外的其它 key）
+        all_keys = getattr(self.memory, "list", lambda: [])()
+        for key in all_keys:
+            if key == "history":
+                continue
+            value = self.memory.retrieve(key)
+            if value is not None:
+                parts.append(f"[Memory: {key}]\n{value}")
+
+        # 2) 历史对话记忆
         history = self.memory.retrieve("history") or []
-        memory_text = "\n".join(
-            f"Q: {h['input']}\nA: {h['response']}" for h in history[-3:]
-        )
-        if memory_text:
-            return f"{memory_text}\nQ: {user_input}"
+        if history:
+            history_text = "\n".join(
+                f"Q: {h['input']}\nA: {h['response']}" for h in history[-3:]
+            )
+            parts.append(f"[History]\n{history_text}")
+
+        if parts:
+            memory_text = "\n\n".join(parts)
+            return f"{memory_text}\n\nQ: {user_input}"
         return user_input
 
     def _remember(self, user_input, response):
-        """Store the turn in memory when ENABLE_MEMORY is true."""
+        """把本轮 user_input 和 response 写入 memory.json。"""
         history = self.memory.retrieve("history") or []
         history.append({"input": user_input, "response": response})
         self.memory.store("history", history[-10:])
