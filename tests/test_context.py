@@ -1,5 +1,7 @@
 """Unit tests for the Context module."""
 
+import pytest
+
 from context import Context
 
 
@@ -100,3 +102,67 @@ def test_update_with_result_str():
 
     latest = state.recent_turns[-1]
     assert latest.role == "assistant"
+
+
+def test_update_empty_input():
+    ctx = Context()
+    state = ctx.update("")
+
+    assert len(state.recent_turns) == 1
+    turn = state.recent_turns[0]
+    assert turn.role == "user"
+    assert turn.content_preview == ""
+    assert turn.content_length == 0
+
+
+def test_get_before_update_returns_defaults():
+    ctx = Context()
+    data = ctx.get()
+
+    assert isinstance(data, dict)
+    assert data["recent_turns"] == []
+    assert data["topic"]["primary_topic"] is None
+    assert data["token_stats"]["warning_level"] == "ok"
+    assert data["token_stats"]["usage_pct"] == 0.0
+
+
+def test_warning_level_ok():
+    ctx = Context(config={"CONTEXT_LIMIT": 100})
+    state = ctx.update("x" * 100)
+
+    assert state.token_stats.warning_level == "ok"
+    assert state.token_stats.usage_pct < 50.0
+
+
+def test_invalid_context_limit_fallback():
+    with pytest.warns(UserWarning, match="Invalid CONTEXT_LIMIT"):
+        ctx = Context(config={"CONTEXT_LIMIT": "not-a-number"})
+
+    assert ctx.context_limit == 4000
+    state = ctx.update("hello")
+    assert state.token_stats.context_limit == 4000
+
+
+def test_invalid_max_recent_turns_fallback():
+    with pytest.warns(UserWarning, match="Invalid MAX_RECENT_TURNS"):
+        ctx = Context(config={"MAX_RECENT_TURNS": "not-a-number"})
+
+    assert ctx.max_recent_turns == 5
+
+
+def test_non_positive_max_recent_turns_fallback():
+    with pytest.warns(UserWarning, match="MAX_RECENT_TURNS must be positive"):
+        ctx = Context(config={"MAX_RECENT_TURNS": -3})
+
+    assert ctx.max_recent_turns == 5
+
+
+def test_snapshot_deep_copy_isolated():
+    ctx = Context()
+    ctx.update("hello")
+
+    snap = ctx.snapshot()
+    snap.recent_turns.clear()
+
+    assert len(ctx.snapshot().recent_turns) == 1
+    assert len(ctx.get()["recent_turns"]) == 1

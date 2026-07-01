@@ -26,11 +26,20 @@ class Context:
             warnings.warn("Invalid MAX_RECENT_TURNS; falling back to 5")
             self.max_recent_turns = 5
 
+        if self.max_recent_turns <= 0:
+            warnings.warn("MAX_RECENT_TURNS must be positive; falling back to 5")
+            self.max_recent_turns = 5
+
         self._state = ContextState()
         self._turn_counter = 0
 
     def _estimate_tokens(self) -> int:
-        """Estimate tokens from the full content length of recent turns."""
+        """Estimate tokens from all recent turns' full content length.
+
+        Each stored turn already includes the full length of its content (including
+        tool result previews), so we sum those lengths and divide by an approximate
+        characters-per-token ratio.
+        """
         total_chars = 0
         for turn in self._state.recent_turns:
             total_chars += turn.content_length
@@ -41,9 +50,9 @@ class Context:
         estimated = self._estimate_tokens()
         usage_pct = (estimated / self.context_limit * 100) if self.context_limit > 0 else 0.0
 
-        if usage_pct >= 100.0:
+        if usage_pct >= 80.0:
             warning_level = "critical"
-        elif usage_pct >= 80.0:
+        elif usage_pct >= 50.0:
             warning_level = "high"
         else:
             warning_level = "ok"
