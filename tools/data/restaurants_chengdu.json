@@ -1,0 +1,56 @@
+[
+  {
+    "name": "陈麻婆豆腐（骡马市店）",
+    "address": "成都市青羊区西玉龙街197号",
+    "cuisine": "川菜",
+    "avg_price": 65,
+    "rating": 4.5,
+    "signature_dishes": ["麻婆豆腐", "回锅肉", "宫保鸡丁"],
+    "open_time": "10:00-21:00"
+  },
+  {
+    "name": "蜀大侠火锅（春熙路店）",
+    "address": "成都市锦江区东大街紫东楼段35号",
+    "cuisine": "火锅",
+    "avg_price": 95,
+    "rating": 4.6,
+    "signature_dishes": ["毛肚", "鸭肠", "麻辣牛肉"],
+    "open_time": "11:00-23:00"
+  },
+  {
+    "name": "明婷饭店",
+    "address": "成都市武侯区电信南街96号",
+    "cuisine": "川菜",
+    "avg_price": 55,
+    "rating": 4.4,
+    "signature_dishes": ["脑花豆腐", "苍蝇头", "酸菜鱼"],
+    "open_time": "11:00-22:00"
+  },
+  {
+    "name": "龙抄手（总店）",
+    "address": "成都市锦江区春熙路南段6-8号",
+    "cuisine": "小吃",
+    "avg_price": 40,
+    "rating": 4.2,
+    "signature_dishes": ["红油抄手", "钟水饺", "担担面"],
+    "open_time": "09:00-21:00"
+  },
+  {
+    "name": "大蓉和（拉德芳斯店）",
+    "address": "成都市武侯区紫荆北路2号",
+    "cuisine": "川菜",
+    "avg_price": 120,
+    "rating": 4.7,
+    "signature_dishes": ["开门红", "蓉和第一骨", "蒜泥白肉"],
+    "open_time": "10:00-22:00"
+  },
+  {
+    "name": "钢管厂五区小郡肝串串香",
+    "address": "成都市锦江区水碾河路26号",
+    "cuisine": "串串",
+    "avg_price": 60,
+    "rating": 4.3,
+    "signature_dishes": ["小郡肝", "牛肉串", "脑花"],
+    "open_time": "11:00-次日02:00"
+  }
+]
