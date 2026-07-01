@@ -4,7 +4,7 @@
 
 **Goal:** 在 `agent-team-exercise` 项目中实现一个 Pydantic 类型化的实用对话版 Context 模块，使其能被 `loop.py` 自动导入并替换内联 Stub，支持最近 N 轮摘要、活跃主题/意图推断和 Token 利用率估算。
 
-**Architecture:** 将 Context 模块拆分为 `models.py`（纯 Pydantic 数据模型）和 `context.py`（状态管理逻辑），通过 `__init__.py` 暴露 `Context` 类。`Context` 维护 `ContextState`，对外保持 `update(input) / get()` 契约；`loop.py` 的导入机制会自动使用真实实现替换 Stub。Token 估算采用字符启发式，主题推断采用关键词规则。
+**Architecture:** 将 Context 模块拆分为 `models.py`（纯 Pydantic 数据模型）和 `state.py`（状态管理逻辑），通过 `__init__.py` 暴露 `Context` 类。`Context` 维护 `ContextState`，对外保持 `update(input) / get()` 契约；`loop.py` 的导入机制会自动使用真实实现替换 Stub。Token 估算采用字符启发式，主题推断采用关键词规则。
 
 **Tech Stack:** Python 3.10+，Pydantic v2，pytest。
 
@@ -26,7 +26,7 @@
 | 文件 | 职责 |
 |------|------|
 | `context/models.py` | Pydantic 数据模型：`ContextState`、`TurnSummary`、`TopicState`、`TokenStats`、`ToolCallRecord` |
-| `context/context.py` | `Context` 类实现：状态管理、更新、主题推断、Token 估算 |
+| `context/state.py` | `Context` 类实现：状态管理、更新、主题推断、Token 估算 |
 | `context/__init__.py` | 暴露 `Context` 类 |
 | `pyproject.toml` | 添加 `pydantic` 依赖 |
 | `tests/test_context.py` | Context 模块单元测试 |
@@ -163,7 +163,7 @@
 ### Task 3: 实现 Context 类
 
 **Files:**
-- Create: `context/context.py`
+- Create: `context/state.py`
 - Modify: `context/__init__.py`（如果已存在则修改，否则创建）
 
 **Interfaces:**
@@ -177,7 +177,7 @@
     - `reset(self) -> None`
     - `snapshot(self) -> ContextState`
 
-- [ ] **Step 1: 创建 `context/context.py`**
+- [ ] **Step 1: 创建 `context/state.py`**
 
   实现要求：
 
@@ -235,7 +235,7 @@
   ```python
   """Context module for the agent team exercise."""
 
-  from context.context import Context
+  from context.state import Context
 
   __all__ = ["Context"]
   ```
@@ -252,7 +252,7 @@
 
   Run:
   ```bash
-  git add context/context.py context/__init__.py
+  git add context/state.py context/__init__.py
   git commit -m "feat(context): implement Context class with topic inference and token estimation"
   ```
 
@@ -360,7 +360,7 @@
   ```bash
   uv run python -c "from context import Context; print(Context.__module__)"
   ```
-  Expected: `context.context`
+  Expected: `context.state`
 
 - [ ] **Step 3: 验证 Skill 能读取 Context**
 
