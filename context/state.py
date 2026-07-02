@@ -145,6 +145,30 @@ class Context:
             return True
         return False
 
+    def _micro_compact(self) -> bool:
+        """Clear full_content of old tool turns to reduce size.
+
+        Only affects tool turns outside the safe window.
+        """
+        if self._state.compression.micro_triggered:
+            return False
+
+        usage = self._state.token_stats.usage_pct
+        if usage < self.micro_threshold:
+            return False
+
+        cleared = 0
+        for turn in self._state.recent_turns[:-self.safe_turns]:
+            if turn.role == "tool" and turn.full_content:
+                turn.full_content = None
+                cleared += 1
+
+        if cleared > 0:
+            self._state.compression.micro_triggered = True
+            self._record_compact_event("micro", 0)
+            return True
+        return False
+
     def _infer_topic(self, user_input: str, turn_id: int) -> TopicState:
         """Infer topic state from user input keywords and quoted entities."""
         lowered = user_input.lower()
@@ -200,6 +224,8 @@ class Context:
         """Run compression layers in order after each update."""
         self._state.token_stats = self._compute_token_stats()
         self._snip_compact()
+        self._state.token_stats = self._compute_token_stats()
+        self._micro_compact()
         self._state.token_stats = self._compute_token_stats()
 
     def update_with_result(self, result: dict | str) -> ContextState:
