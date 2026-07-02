@@ -1,6 +1,6 @@
 """Open-Meteo 天气 API 客户端（替代已失效的和风天气 v2 接口）。
 
-Open-Meteo 是完全免费、无需 API Key 的开源天气服务。
+`Open-Meteo` 是完全免费、无需 API Key 的开源天气服务。
 文档：https://open-meteo.com/en/docs
 
 本文件提供的工具函数（被 tool.py / itinerary_generator 调用）：
