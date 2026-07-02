@@ -54,14 +54,16 @@ class Context:
         return text[: self.preview_length]
 
     def _estimate_tokens(self) -> int:
-        """Estimate tokens from recent turns' content previews.
-
-        Each stored turn exposes a truncated content preview (at most 120
-        characters), so we sum those lengths and divide by an approximate
-        characters-per-token ratio.
-        """
-        total_chars = sum(len(turn.content_preview) for turn in self._state.recent_turns)
-        return ceil(total_chars / 4)
+        """Estimate tokens from full_content, falling back to content_preview."""
+        total = 0
+        for turn in self._state.recent_turns:
+            text = turn.full_content or turn.content_preview or ""
+            total += len(text)
+            if turn.tool_calls:
+                for tc in turn.tool_calls:
+                    preview = tc.result_preview or ""
+                    total += len(preview)
+        return max(0, ceil(total / 4))
 
     def _compute_token_stats(self) -> TokenStats:
         """Compute current token usage statistics."""
@@ -121,6 +123,7 @@ class Context:
             turn_id=self._turn_counter,
             role="user",
             content_preview=self._make_preview(user_input),
+            full_content=user_input,
             timestamp=datetime.now(),
         )
         self._state.recent_turns.append(turn)
@@ -136,21 +139,18 @@ class Context:
         self._turn_counter += 1
 
         if isinstance(result, dict):
-            tool_name = result.get("tool_name", "tool")
-            params = result.get("params", {})
-            result_preview = result.get("result_preview")
-            if result_preview is None:
-                result_preview = self._make_preview(str(result))
-
+            result_preview = result.get("result_preview") or str(result)[:self.preview_length]
+            full_result = result.get("result_preview") or str(result)
             tool_call = ToolCallRecord(
-                tool_name=tool_name,
-                params=params,
+                tool_name=result.get("tool_name", "unknown"),
+                params=result.get("params", {}),
                 result_preview=result_preview,
             )
             turn = TurnSummary(
                 turn_id=self._turn_counter,
                 role="tool",
-                content_preview=self._make_preview(result_preview),
+                content_preview=result_preview,
+                full_content=full_result,
                 tool_calls=[tool_call],
                 timestamp=datetime.now(),
             )
@@ -160,6 +160,7 @@ class Context:
                 turn_id=self._turn_counter,
                 role="assistant",
                 content_preview=self._make_preview(text),
+                full_content=text,
                 timestamp=datetime.now(),
             )
 

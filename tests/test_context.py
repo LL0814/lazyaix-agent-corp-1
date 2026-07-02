@@ -175,7 +175,7 @@ def test_tool_turn_contributes_to_token_estimate():
         {"tool_name": "weather", "params": {"city": "Beijing"}, "result_preview": tool_preview}
     )
 
-    expected_chars = len(user_input[:120]) + len(tool_preview[:120])
+    expected_chars = len(user_input) + len(tool_preview) + len(tool_preview)
     expected_tokens = (expected_chars + 3) // 4  # ceil without math import
     assert state.token_stats.estimated_tokens == expected_tokens
 
