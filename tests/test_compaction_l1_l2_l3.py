@@ -113,10 +113,25 @@ def test_snip_compact_protects_tool_pair_head():
     messages[3] = _tool_result_msg("tu1", "sunny")
     result = snip_compact(messages, max_messages=50)
     _assert_no_orphan_tool_results(result)
-    # The tool_result at index 3 should be pulled into head if needed
-    ids = [m.get("_test_id") for m in result]
-    # Instead verify no orphan and structure
-    assert any(_message_has_tool_use(m) for m in result)
+    # Verify the tool_use and its matching tool_result are kept together
+    tool_use_idx = next(i for i, m in enumerate(result) if _message_has_tool_use(m))
+    assert tool_use_idx + 1 < len(result)
+    assert result[tool_use_idx] == messages[2]
+    assert result[tool_use_idx + 1] == messages[3]
+
+
+def test_snip_compact_protects_tool_pair_tail():
+    messages = [{"role": "user", "content": f"msg {i}"} for i in range(60)]
+    # Insert tool_use at index 12, tool_result at index 13 (where tail cut would land)
+    messages[12] = _tool_use_msg("tu2")
+    messages[13] = _tool_result_msg("tu2", "sunny")
+    result = snip_compact(messages, max_messages=50)
+    _assert_no_orphan_tool_results(result)
+    # Verify the tool_use and its matching tool_result are kept together in the tail
+    tool_result_idx = next(i for i, m in enumerate(result) if _is_tool_result_message(m))
+    assert tool_result_idx > 0
+    assert result[tool_result_idx - 1] == messages[12]
+    assert result[tool_result_idx] == messages[13]
 
 
 def test_snip_compact_no_op_when_short():

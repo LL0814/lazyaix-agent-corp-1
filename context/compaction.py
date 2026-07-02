@@ -128,11 +128,14 @@ def snip_compact(
         tail_start -= 1
 
     if head_end >= tail_start:
+        _assert_no_orphan_tool_results(messages)
         return messages
 
     snipped = tail_start - head_end
-    return (
+    result = (
         messages[:head_end]
         + [{"role": "user", "content": f"[snipped {snipped} messages]"}]
         + messages[tail_start:]
     )
+    _assert_no_orphan_tool_results(result)
+    return result
