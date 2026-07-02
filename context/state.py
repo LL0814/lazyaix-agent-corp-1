@@ -169,6 +169,46 @@ class Context:
             return True
         return False
 
+    def _context_collapse(self) -> bool:
+        """Collapse old turns into a single summary turn.
+
+        Combines all turns outside the safe window into one system summary turn.
+        """
+        if self._state.compression.collapse_triggered:
+            return False
+
+        usage = self._state.token_stats.usage_pct
+        if usage < self.collapse_threshold:
+            return False
+
+        if len(self._state.recent_turns) <= self.safe_turns:
+            return False
+
+        old_turns = self._state.recent_turns[:-self.safe_turns]
+        kept_turns = self._state.recent_turns[-self.safe_turns:]
+
+        topics = {self._state.topic.primary_topic}
+        topics.discard(None)
+        entities = list(self._state.topic.active_entities)[:5]
+
+        summary_text = (
+            f"[Summary of turns {old_turns[0].turn_id}-{old_turns[-1].turn_id}] "
+            f"Topics: {', '.join(topics) or 'none'}. "
+            f"Entities: {', '.join(entities) or 'none'}."
+        )
+        summary_turn = TurnSummary(
+            turn_id=old_turns[-1].turn_id,
+            role="system",
+            content_preview=self._make_preview(summary_text),
+            full_content=summary_text,
+            timestamp=datetime.now(),
+        )
+
+        self._state.recent_turns = [summary_turn] + kept_turns
+        self._state.compression.collapse_triggered = True
+        self._record_compact_event("collapse", len(old_turns))
+        return True
+
     def _infer_topic(self, user_input: str, turn_id: int) -> TopicState:
         """Infer topic state from user input keywords and quoted entities."""
         lowered = user_input.lower()
@@ -226,6 +266,8 @@ class Context:
         self._snip_compact()
         self._state.token_stats = self._compute_token_stats()
         self._micro_compact()
+        self._state.token_stats = self._compute_token_stats()
+        self._context_collapse()
         self._state.token_stats = self._compute_token_stats()
 
     def update_with_result(self, result: dict | str) -> ContextState:

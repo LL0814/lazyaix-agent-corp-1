@@ -18,7 +18,7 @@ class TurnSummary(BaseModel):
     """Summary of a single conversation turn."""
 
     turn_id: int
-    role: Literal["user", "assistant", "tool"]
+    role: Literal["user", "assistant", "tool", "system"]
     content_preview: str
     full_content: str | None = None
     tool_calls: list[ToolCallRecord] | None = None

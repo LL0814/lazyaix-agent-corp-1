@@ -314,36 +314,71 @@ def test_snip_compact_records_event():
 
 
 def test_micro_compact_clears_old_tool_full_content():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    ctx.update("hello")
-    long_result = "sunny" + "x" * 300
+    ctx = Context(
+        config={
+            "CONTEXT_LIMIT": 100,
+            "MAX_RECENT_TURNS": 10,
+            "SNIP_THRESHOLD": 100.0,  # disable snip so only micro fires
+            "MICRO_THRESHOLD": 50.0,
+        }
+    )
+    ctx.update("a" * 50)
+    long_result = "sunny" + "x" * 95
     ctx.update_with_result({
         "tool_name": "weather",
         "params": {"city": "Beijing"},
         "result_preview": long_result,
     })
-    # Push usage over 65% threshold
-    for i in range(5):
-        ctx.update("a" * 100)
+    ctx.update("a" * 50)
+    ctx.update("a" * 50)
+    ctx.update("a" * 20)
 
     tool_turns = [t for t in ctx._state.recent_turns if t.role == "tool"]
-    # The tool turn is not in the safe window (last 3), so its full_content should be cleared
     assert len(tool_turns) == 1
     assert tool_turns[0].full_content is None
 
 
 def test_micro_compact_records_event():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    ctx.update("hello")
+    ctx = Context(
+        config={
+            "CONTEXT_LIMIT": 100,
+            "MAX_RECENT_TURNS": 10,
+            "SNIP_THRESHOLD": 100.0,
+            "MICRO_THRESHOLD": 50.0,
+        }
+    )
+    ctx.update("a" * 50)
     ctx.update_with_result({
         "tool_name": "weather",
         "params": {"city": "Beijing"},
-        "result_preview": "sunny" + "x" * 300,
+        "result_preview": "sunny" + "x" * 95,
     })
-    for i in range(5):
-        ctx.update("a" * 100)
+    ctx.update("a" * 50)
+    ctx.update("a" * 50)
+    ctx.update("a" * 20)
 
     events = [e for e in ctx._state.compression.compact_history if e.layer == "micro"]
     assert len(events) == 1
+
+
+def test_context_collapse_merges_old_turns():
+    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    for i in range(8):
+        ctx.update("a" * 100)
+
+    collapsed = any(t.role == "system" for t in ctx._state.recent_turns)
+    assert collapsed
+    assert ctx._state.compression.collapse_triggered
+
+
+def test_context_collapse_keeps_safe_turns():
+    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    for i in range(8):
+        ctx.update(f"turn {i}")
+
+    # Last 3 turns should be preserved as-is
+    kept_turns = ctx._state.recent_turns[-3:]
+    assert all(t.role == "user" for t in kept_turns)
+
 
 
