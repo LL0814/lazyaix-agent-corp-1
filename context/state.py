@@ -341,6 +341,41 @@ class Context:
         """Return the current context state as a JSON-serializable dict."""
         return self._state.model_dump(mode="json")
 
+    def compact(self, force: bool = False) -> ContextState:
+        """Manually trigger compression layers.
+
+        If force is True, temporarily lower thresholds so all available
+        layers run. AutoCompact remains a stub even when forced.
+        """
+        if force:
+            original_thresholds = {
+                "snip": self.snip_threshold,
+                "micro": self.micro_threshold,
+                "collapse": self.collapse_threshold,
+                "auto": self.auto_threshold,
+            }
+            self.snip_threshold = 0.0
+            self.micro_threshold = 0.0
+            self.collapse_threshold = 0.0
+            self.auto_threshold = 0.0
+            try:
+                self._run_compression()
+            finally:
+                self.snip_threshold = original_thresholds["snip"]
+                self.micro_threshold = original_thresholds["micro"]
+                self.collapse_threshold = original_thresholds["collapse"]
+                self.auto_threshold = original_thresholds["auto"]
+        else:
+            self._run_compression()
+        return self._state
+
+    def reset_compression_flags(self) -> None:
+        """Reset compression trigger flags so layers can fire again."""
+        self._state.compression.snip_triggered = False
+        self._state.compression.micro_triggered = False
+        self._state.compression.collapse_triggered = False
+        self._state.compression.auto_triggered = False
+
     def reset(self) -> None:
         """Reset the context state."""
         self._state = ContextState()

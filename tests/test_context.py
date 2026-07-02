@@ -392,5 +392,28 @@ def test_auto_compact_is_noop_without_llm():
     assert "LLM" in auto_events[0].notes or "not available" in auto_events[0].notes.lower()
 
 
+def test_compact_manual_force():
+    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    ctx.compact(force=True)
+    assert ctx._state.compression.snip_triggered
+
+
+def test_reset_compression_flags():
+    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    assert ctx._state.compression.snip_triggered
+    ctx.reset_compression_flags()
+    assert not ctx._state.compression.snip_triggered
+    assert not ctx._state.compression.micro_triggered
+    assert not ctx._state.compression.collapse_triggered
+    assert not ctx._state.compression.auto_triggered
+
+
+
 
 
