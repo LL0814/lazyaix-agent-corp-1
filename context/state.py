@@ -209,6 +209,34 @@ class Context:
         self._record_compact_event("collapse", len(old_turns))
         return True
 
+    def _auto_compact(self) -> bool:
+        """Auto-compact stub: records event but does not call LLM.
+
+        Real LLM-based compression would be implemented here when a model
+        adapter is available.
+        """
+        if self._state.compression.auto_triggered:
+            return False
+
+        usage = self._state.token_stats.usage_pct
+        if usage < self.auto_threshold:
+            return False
+
+        self._state.compression.auto_triggered = True
+        before = self._state.token_stats.usage_pct
+        self._state.token_stats = self._compute_token_stats()
+        after = self._state.token_stats.usage_pct
+        event = CompactEvent(
+            timestamp=datetime.now(),
+            layer="auto",
+            threshold=self.auto_threshold,
+            usage_before=before,
+            usage_after=after,
+            notes="LLM compact not available in stub mode",
+        )
+        self._state.compression.compact_history.append(event)
+        return True
+
     def _infer_topic(self, user_input: str, turn_id: int) -> TopicState:
         """Infer topic state from user input keywords and quoted entities."""
         lowered = user_input.lower()
@@ -268,6 +296,8 @@ class Context:
         self._micro_compact()
         self._state.token_stats = self._compute_token_stats()
         self._context_collapse()
+        self._state.token_stats = self._compute_token_stats()
+        self._auto_compact()
         self._state.token_stats = self._compute_token_stats()
 
     def update_with_result(self, result: dict | str) -> ContextState:

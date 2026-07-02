@@ -381,4 +381,16 @@ def test_context_collapse_keeps_safe_turns():
     assert all(t.role == "user" for t in kept_turns)
 
 
+def test_auto_compact_is_noop_without_llm():
+    ctx = Context(config={"CONTEXT_LIMIT": 50, "MAX_RECENT_TURNS": 10})
+    for i in range(10):
+        ctx.update("a" * 100)
+
+    assert ctx._state.compression.auto_triggered
+    auto_events = [e for e in ctx._state.compression.compact_history if e.layer == "auto"]
+    assert len(auto_events) == 1
+    assert "LLM" in auto_events[0].notes or "not available" in auto_events[0].notes.lower()
+
+
+
 
