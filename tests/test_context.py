@@ -175,7 +175,7 @@ def test_tool_turn_contributes_to_token_estimate():
         {"tool_name": "weather", "params": {"city": "Beijing"}, "result_preview": tool_preview}
     )
 
-    expected_chars = len(user_input) + len(tool_preview) + len(tool_preview)
+    expected_chars = len(user_input) + len(tool_preview)
     expected_tokens = (expected_chars + 3) // 4  # ceil without math import
     assert state.token_stats.estimated_tokens == expected_tokens
 
@@ -272,10 +272,30 @@ def test_protected_keywords_constant():
     assert Context._PROTECTED_KEYWORDS == (
         "write_file",
         "edit_file",
-        "edit",
         "error",
         "traceback",
     )
+
+
+def test_invalid_preview_length_fallback():
+    with pytest.warns(UserWarning, match="Invalid PREVIEW_LENGTH"):
+        ctx = Context(config={"PREVIEW_LENGTH": "not-a-number"})
+
+    assert ctx.preview_length == 120
+
+
+def test_non_positive_preview_length_fallback():
+    with pytest.warns(UserWarning, match="PREVIEW_LENGTH must be positive"):
+        ctx = Context(config={"PREVIEW_LENGTH": -10})
+
+    assert ctx.preview_length == 120
+
+
+def test_invalid_threshold_fallback():
+    with pytest.warns(UserWarning, match="Invalid SNIP_THRESHOLD"):
+        ctx = Context(config={"SNIP_THRESHOLD": "bad"})
+
+    assert ctx.snip_threshold == 50.0
 
 
 def test_snip_compact_triggers_at_threshold():
@@ -320,6 +340,8 @@ def test_micro_compact_clears_old_tool_full_content():
             "MAX_RECENT_TURNS": 10,
             "SNIP_THRESHOLD": 100.0,  # disable snip so only micro fires
             "MICRO_THRESHOLD": 50.0,
+            "COLLAPSE_THRESHOLD": 100.0,  # disable collapse
+            "AUTO_THRESHOLD": 100.0,
         }
     )
     ctx.update("a" * 50)
@@ -345,6 +367,8 @@ def test_micro_compact_records_event():
             "MAX_RECENT_TURNS": 10,
             "SNIP_THRESHOLD": 100.0,
             "MICRO_THRESHOLD": 50.0,
+            "COLLAPSE_THRESHOLD": 100.0,
+            "AUTO_THRESHOLD": 100.0,
         }
     )
     ctx.update("a" * 50)
@@ -393,9 +417,21 @@ def test_auto_compact_is_noop_without_llm():
 
 
 def test_compact_manual_force():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    ctx = Context(
+        config={
+            "CONTEXT_LIMIT": 100,
+            "MAX_RECENT_TURNS": 10,
+            "SNIP_THRESHOLD": 101.0,
+            "MICRO_THRESHOLD": 101.0,
+            "COLLAPSE_THRESHOLD": 101.0,
+            "AUTO_THRESHOLD": 101.0,
+        }
+    )
     for i in range(4):
         ctx.update("a" * 100)
+
+    # No compression triggered automatically (usage == 100%, thresholds at 101%)
+    assert not ctx._state.compression.snip_triggered
 
     ctx.compact(force=True)
     assert ctx._state.compression.snip_triggered

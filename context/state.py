@@ -11,7 +11,7 @@ from context.models import CompactEvent, ContextState, ToolCallRecord, TokenStat
 class Context:
     """Manages conversation context state."""
 
-    _PROTECTED_KEYWORDS = ("write_file", "edit_file", "edit", "error", "traceback")
+    _PROTECTED_KEYWORDS = ("write_file", "edit_file", "error", "traceback")
 
     def __init__(self, config: dict | None = None):
         config = config or {}
@@ -36,16 +36,41 @@ class Context:
             warnings.warn("MAX_RECENT_TURNS must be positive; falling back to 5")
             self.max_recent_turns = 5
 
-        self.preview_length = int(config.get("PREVIEW_LENGTH", 120))
-        self.safe_turns = int(config.get("SAFE_TURNS", 3))
+        try:
+            self.preview_length = int(config.get("PREVIEW_LENGTH", 120))
+        except (ValueError, TypeError):
+            warnings.warn("Invalid PREVIEW_LENGTH; falling back to 120")
+            self.preview_length = 120
+
+        if self.preview_length <= 0:
+            warnings.warn("PREVIEW_LENGTH must be positive; falling back to 120")
+            self.preview_length = 120
+
+        try:
+            self.safe_turns = int(config.get("SAFE_TURNS", 3))
+        except (ValueError, TypeError):
+            warnings.warn("Invalid SAFE_TURNS; falling back to 3")
+            self.safe_turns = 3
+
         if self.safe_turns <= 0:
             warnings.warn("SAFE_TURNS must be positive; falling back to 3")
             self.safe_turns = 3
 
-        self.snip_threshold = float(config.get("SNIP_THRESHOLD", 50.0))
-        self.micro_threshold = float(config.get("MICRO_THRESHOLD", 65.0))
-        self.collapse_threshold = float(config.get("COLLAPSE_THRESHOLD", 80.0))
-        self.auto_threshold = float(config.get("AUTO_THRESHOLD", 90.0))
+        def _threshold(name: str, default: float) -> float:
+            try:
+                value = float(config.get(name, default))
+            except (ValueError, TypeError):
+                warnings.warn(f"Invalid {name}; falling back to {default}")
+                value = default
+            if value < 0:
+                warnings.warn(f"{name} must be non-negative; falling back to {default}")
+                value = default
+            return value
+
+        self.snip_threshold = _threshold("SNIP_THRESHOLD", 50.0)
+        self.micro_threshold = _threshold("MICRO_THRESHOLD", 65.0)
+        self.collapse_threshold = _threshold("COLLAPSE_THRESHOLD", 80.0)
+        self.auto_threshold = _threshold("AUTO_THRESHOLD", 90.0)
 
         self._state = ContextState()
         self._turn_counter = 0
@@ -54,12 +79,17 @@ class Context:
         return text[: self.preview_length]
 
     def _estimate_tokens(self) -> int:
-        """Estimate tokens from full_content, falling back to content_preview."""
+        """Estimate tokens from each turn's effective content.
+
+        Uses full_content when available, otherwise content_preview.
+        Tool-call result previews are only added when the turn itself
+        does not already contain the full result.
+        """
         total = 0
         for turn in self._state.recent_turns:
             text = turn.full_content or turn.content_preview or ""
             total += len(text)
-            if turn.tool_calls:
+            if not turn.full_content and turn.tool_calls:
                 for tc in turn.tool_calls:
                     preview = tc.result_preview or ""
                     total += len(preview)
@@ -93,10 +123,10 @@ class Context:
         self,
         layer: str,
         turns_removed: int = 0,
+        usage_before: float = 0.0,
         notes: str = "",
     ) -> None:
         """Record a compression event in the compression state."""
-        before = self._state.token_stats.usage_pct
         self._state.token_stats = self._compute_token_stats()
         after = self._state.token_stats.usage_pct
         threshold = getattr(self, f"{layer}_threshold")
@@ -104,7 +134,7 @@ class Context:
             timestamp=datetime.now(),
             layer=layer,  # type: ignore[arg-type]
             threshold=threshold,
-            usage_before=before,
+            usage_before=usage_before,
             usage_after=after,
             turns_removed=turns_removed,
             notes=notes,
@@ -126,6 +156,7 @@ class Context:
             return False
 
         removed = 0
+        usage_before = self._state.token_stats.usage_pct
         while self._state.token_stats.usage_pct >= self.snip_threshold:
             candidates = [
                 i
@@ -141,7 +172,7 @@ class Context:
 
         if removed > 0:
             self._state.compression.snip_triggered = True
-            self._record_compact_event("snip", removed)
+            self._record_compact_event("snip", removed, usage_before=usage_before)
             return True
         return False
 
@@ -158,6 +189,7 @@ class Context:
             return False
 
         cleared = 0
+        usage_before = self._state.token_stats.usage_pct
         for turn in self._state.recent_turns[:-self.safe_turns]:
             if turn.role == "tool" and turn.full_content:
                 turn.full_content = None
@@ -165,7 +197,7 @@ class Context:
 
         if cleared > 0:
             self._state.compression.micro_triggered = True
-            self._record_compact_event("micro", 0)
+            self._record_compact_event("micro", 0, usage_before=usage_before)
             return True
         return False
 
@@ -187,9 +219,25 @@ class Context:
         old_turns = self._state.recent_turns[:-self.safe_turns]
         kept_turns = self._state.recent_turns[-self.safe_turns:]
 
-        topics = {self._state.topic.primary_topic}
-        topics.discard(None)
-        entities = list(self._state.topic.active_entities)[:5]
+        # Aggregate topics and entities from the turns being collapsed.
+        topics: set[str] = set()
+        entities: list[str] = []
+        seen_entities: set[str] = set()
+        for turn in old_turns:
+            text = turn.full_content or turn.content_preview or ""
+            lowered = text.lower()
+            if "weather" in lowered or "天气" in text:
+                topics.add("weather")
+            if "calculate" in lowered or "计算" in text:
+                topics.add("math")
+            if "write" in lowered or "写文件" in text or "edit_file" in lowered:
+                topics.add("file_edit")
+            for match in re.findall(r"['\"](.*?)['\"]", text):
+                if match not in seen_entities:
+                    seen_entities.add(match)
+                    entities.append(match)
+
+        entities = entities[:5]
 
         summary_text = (
             f"[Summary of turns {old_turns[0].turn_id}-{old_turns[-1].turn_id}] "
@@ -206,7 +254,7 @@ class Context:
 
         self._state.recent_turns = [summary_turn] + kept_turns
         self._state.compression.collapse_triggered = True
-        self._record_compact_event("collapse", len(old_turns))
+        self._record_compact_event("collapse", len(old_turns), usage_before=usage)
         return True
 
     def _auto_compact(self) -> bool:
@@ -223,18 +271,12 @@ class Context:
             return False
 
         self._state.compression.auto_triggered = True
-        before = self._state.token_stats.usage_pct
-        self._state.token_stats = self._compute_token_stats()
-        after = self._state.token_stats.usage_pct
-        event = CompactEvent(
-            timestamp=datetime.now(),
-            layer="auto",
-            threshold=self.auto_threshold,
-            usage_before=before,
-            usage_after=after,
+        self._record_compact_event(
+            "auto",
+            0,
+            usage_before=usage,
             notes="LLM compact not available in stub mode",
         )
-        self._state.compression.compact_history.append(event)
         return True
 
     def _infer_topic(self, user_input: str, turn_id: int) -> TopicState:
@@ -290,15 +332,14 @@ class Context:
 
     def _run_compression(self) -> None:
         """Run compression layers in order after each update."""
-        self._state.token_stats = self._compute_token_stats()
-        self._snip_compact()
-        self._state.token_stats = self._compute_token_stats()
-        self._micro_compact()
-        self._state.token_stats = self._compute_token_stats()
-        self._context_collapse()
-        self._state.token_stats = self._compute_token_stats()
-        self._auto_compact()
-        self._state.token_stats = self._compute_token_stats()
+        for layer_method in (
+            self._snip_compact,
+            self._micro_compact,
+            self._context_collapse,
+            self._auto_compact,
+        ):
+            if layer_method():
+                self._state.token_stats = self._compute_token_stats()
 
     def update_with_result(self, result: dict | str) -> ContextState:
         """Record an assistant or tool result turn and update context state."""
@@ -344,8 +385,9 @@ class Context:
     def compact(self, force: bool = False) -> ContextState:
         """Manually trigger compression layers.
 
-        If force is True, temporarily lower thresholds so all available
-        layers run. AutoCompact remains a stub even when forced.
+        If force is True, reset all compression flags and temporarily lower
+        thresholds so all available layers run. AutoCompact remains a stub
+        even when forced.
         """
         if force:
             original_thresholds = {
@@ -354,6 +396,7 @@ class Context:
                 "collapse": self.collapse_threshold,
                 "auto": self.auto_threshold,
             }
+            self.reset_compression_flags()
             self.snip_threshold = 0.0
             self.micro_threshold = 0.0
             self.collapse_threshold = 0.0
