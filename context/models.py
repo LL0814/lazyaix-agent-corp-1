@@ -85,8 +85,8 @@ class TokenStats(BaseModel):
 
     # 估算的已用 token 数（公式：ceil(总字符数 / 4)）
     estimated_tokens: int = 0
-    # 上下文容量上限，对应配置项 CONTEXT_LIMIT，默认 4000
-    context_limit: int = 4000
+    # 上下文容量上限，对应配置项 CONTEXT_LIMIT，默认 50000
+    context_limit: int = 50_000
     # 利用率百分比 = estimated_tokens / context_limit * 100
     usage_pct: float = 0.0
     # 压力等级：ok(<50%) / high(50-80%) / critical(>=80%)，仅供显示
@@ -94,45 +94,32 @@ class TokenStats(BaseModel):
 
 
 class CompactEvent(BaseModel):
-    """单次压缩事件的记录。
+    """Record of a single compaction event."""
 
-    每当某一层压缩（snip/micro/collapse/auto）实际触发时，
-    都会在 CompressionState.compact_history 中追加一条 CompactEvent，
-    用于审计与调试。包含触发前后利用率、删除条数等关键指标。
-    """
-
-    # 事件发生时间
     timestamp: datetime
-    # 触发的压缩层：snip / micro / collapse / auto
-    layer: Literal["snip", "micro", "collapse", "auto"]
-    # 该层的触发阈值（百分比）
-    threshold: float
-    # 压缩前的利用率
-    usage_before: float
-    # 压缩后的利用率（snip/collapse 会下降；micro/auto 通常不变）
-    usage_after: float
-    # 本次删除/折叠的 turn 数量
-    turns_removed: int = 0
-    # 备注信息，例如 AutoCompact 的 "LLM compact not available in stub mode"
+    layer: Literal[
+        "tool_result_budget",
+        "snip",
+        "micro",
+        "compact_history",
+        "reactive",
+    ]
+    usage_before: int = 0
+    usage_after: int = 0
     notes: str = ""
 
 
 class CompressionState(BaseModel):
-    """四层渐进压缩的整体状态。
+    """Tracks which compaction layers have fired and their history."""
 
-    记录每一层是否已触发过（防止重复触发）以及完整的压缩历史。
-    可通过 Context.reset_compression_flags() 重置标志位以允许重新触发。
-    """
-
-    # SnipCompact 是否已触发（删除安全旧 turn）
+    tool_result_budget_triggered: bool = False
     snip_triggered: bool = False
-    # MicroCompact 是否已触发（清空旧 tool turn 的 full_content）
     micro_triggered: bool = False
-    # ContextCollapse 是否已触发（旧 turn 合并为 summary）
-    collapse_triggered: bool = False
-    # AutoCompact 是否已触发（预留 stub，不调用 LLM）
-    auto_triggered: bool = False
-    # 按时间顺序记录的所有压缩事件
+    compact_history_triggered: bool = False
+    compact_history_failures: int = 0
+    compact_history_disabled: bool = False
+    compact_history_path: str | None = None
+    compact_history_summary: str | None = None
     compact_history: list[CompactEvent] = Field(default_factory=list)
 
 

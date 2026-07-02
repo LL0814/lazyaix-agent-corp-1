@@ -3,6 +3,7 @@
 import pytest
 
 from context import Context
+from context.compaction import reactive_compact
 
 
 def test_update_appends_user_turn():
@@ -138,9 +139,9 @@ def test_invalid_context_limit_fallback():
     with pytest.warns(UserWarning, match="Invalid CONTEXT_LIMIT"):
         ctx = Context(config={"CONTEXT_LIMIT": "not-a-number"})
 
-    assert ctx.context_limit == 4000
+    assert ctx.context_limit == 50_000
     state = ctx.update("hello")
-    assert state.token_stats.context_limit == 4000
+    assert state.token_stats.context_limit == 50_000
 
 
 def test_invalid_max_recent_turns_fallback():
@@ -161,23 +162,20 @@ def test_non_positive_context_limit_fallback():
     with pytest.warns(UserWarning, match="CONTEXT_LIMIT must be positive"):
         ctx = Context(config={"CONTEXT_LIMIT": 0})
 
-    assert ctx.context_limit == 4000
+    assert ctx.context_limit == 50_000
     state = ctx.update("hello")
-    assert state.token_stats.context_limit == 4000
+    assert state.token_stats.context_limit == 50_000
 
 
-def test_tool_turn_contributes_to_token_estimate():
+def test_snapshot_deep_copy_isolated():
     ctx = Context()
-    user_input = "what is the weather?"
-    ctx.update(user_input)
-    tool_preview = "sunny and 75 degrees"
-    state = ctx.update_with_result(
-        {"tool_name": "weather", "params": {"city": "Beijing"}, "result_preview": tool_preview}
-    )
+    ctx.update("hello")
 
-    expected_chars = len(user_input) + len(tool_preview)
-    expected_tokens = (expected_chars + 3) // 4  # ceil without math import
-    assert state.token_stats.estimated_tokens == expected_tokens
+    snap = ctx.snapshot()
+    snap.recent_turns.clear()
+
+    assert len(ctx.snapshot().recent_turns) == 1
+    assert len(ctx.get()["recent_turns"]) == 1
 
 
 def test_agent_process_turn_integration():
@@ -194,7 +192,6 @@ def test_agent_process_turn_integration():
             return self._data.get(key)
 
     # Avoid calling the real LLM API during this integration test.
-    original_complete = Context.__module__
     context = Context()
     memory = MemoryStub()
     agent = Agent(context=context, memory=memory)
@@ -209,274 +206,101 @@ def test_agent_process_turn_integration():
     assert len(data["recent_turns"]) >= 1
 
 
-def test_snapshot_deep_copy_isolated():
-    ctx = Context()
+def test_context_get_messages_returns_compacted_list():
+    ctx = Context(config={"CONTEXT_LIMIT": 100})
     ctx.update("hello")
-
-    snap = ctx.snapshot()
-    snap.recent_turns.clear()
-
-    assert len(ctx.snapshot().recent_turns) == 1
-    assert len(ctx.get()["recent_turns"]) == 1
+    messages = ctx.get_messages()
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
 
 
-def test_compression_configuration_defaults():
-    ctx = Context()
-
-    assert ctx.preview_length == 120
-    assert ctx.safe_turns == 3
-    assert ctx.snip_threshold == 50.0
-    assert ctx.micro_threshold == 65.0
-    assert ctx.collapse_threshold == 80.0
-    assert ctx.auto_threshold == 90.0
-
-
-def test_compression_configuration_overrides():
-    ctx = Context(
-        config={
-            "PREVIEW_LENGTH": 50,
-            "SAFE_TURNS": 2,
-            "SNIP_THRESHOLD": 55.0,
-            "MICRO_THRESHOLD": 70.0,
-            "COLLAPSE_THRESHOLD": 85.0,
-            "AUTO_THRESHOLD": 95.0,
-        }
-    )
-
-    assert ctx.preview_length == 50
-    assert ctx.safe_turns == 2
-    assert ctx.snip_threshold == 55.0
-    assert ctx.micro_threshold == 70.0
-    assert ctx.collapse_threshold == 85.0
-    assert ctx.auto_threshold == 95.0
-
-
-def test_non_positive_safe_turns_fallback():
-    with pytest.warns(UserWarning, match="SAFE_TURNS must be positive"):
-        ctx = Context(config={"SAFE_TURNS": 0})
-
-    assert ctx.safe_turns == 3
-
-
-def test_preview_length_affects_truncation():
-    ctx = Context(config={"PREVIEW_LENGTH": 10})
-    state = ctx.update("x" * 100)
-
-    assert state.recent_turns[0].content_preview == "x" * 10
-
-
-def test_make_preview_method():
-    ctx = Context(config={"PREVIEW_LENGTH": 7})
-
-    assert ctx._make_preview("hello world") == "hello w"
-
-
-def test_protected_keywords_constant():
-    assert Context._PROTECTED_KEYWORDS == (
-        "write_file",
-        "edit_file",
-        "error",
-        "traceback",
-    )
-
-
-def test_invalid_preview_length_fallback():
-    with pytest.warns(UserWarning, match="Invalid PREVIEW_LENGTH"):
-        ctx = Context(config={"PREVIEW_LENGTH": "not-a-number"})
-
-    assert ctx.preview_length == 120
-
-
-def test_non_positive_preview_length_fallback():
-    with pytest.warns(UserWarning, match="PREVIEW_LENGTH must be positive"):
-        ctx = Context(config={"PREVIEW_LENGTH": -10})
-
-    assert ctx.preview_length == 120
-
-
-def test_invalid_threshold_fallback():
-    with pytest.warns(UserWarning, match="Invalid SNIP_THRESHOLD"):
-        ctx = Context(config={"SNIP_THRESHOLD": "bad"})
-
-    assert ctx.snip_threshold == 50.0
-
-
-def test_snip_compact_triggers_at_threshold():
-    ctx = Context(config={"CONTEXT_LIMIT": 100})
-    # Each turn: 100 chars / 4 = 25 tokens. 4 turns = 100 tokens = 100%.
-    for i in range(4):
-        ctx.update("a" * 100)
-
+def test_context_triggers_snip():
+    ctx = Context(config={"KEEP_RECENT_MESSAGES": 10})
+    for i in range(20):
+        ctx.update(f"message {i}")
     assert ctx._state.compression.snip_triggered
-    assert len(ctx._state.recent_turns) <= ctx.safe_turns + 1
+    assert len(ctx.get_messages()) <= 11
 
 
-def test_snip_compact_protects_keywords():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    for i in range(4):
-        ctx.update("a" * 100)
-    ctx.update("write_file test.txt hello")  # protected, in the middle
-    for i in range(4):
-        ctx.update("a" * 100)
-
-    protected = any(
-        "write_file" in (t.full_content or t.content_preview or "")
-        for t in ctx._state.recent_turns
-    )
-    assert protected
+def test_context_triggers_micro():
+    ctx = Context(config={"KEEP_RECENT_TOOL_RESULTS": 3})
+    for i in range(5):
+        ctx.update_with_result({
+            "tool_name": "weather",
+            "params": {"city": "Beijing"},
+            "result_preview": f"result {i}: " + "x" * 200,
+        })
+    assert ctx._state.compression.micro_triggered
 
 
-def test_snip_compact_records_event():
-    ctx = Context(config={"CONTEXT_LIMIT": 100})
-    for i in range(4):
-        ctx.update("a" * 100)
-
-    events = [e for e in ctx._state.compression.compact_history if e.layer == "snip"]
-    assert len(events) == 1
-    assert events[0].turns_removed > 0
-
-
-def test_micro_compact_clears_old_tool_full_content():
-    ctx = Context(
-        config={
-            "CONTEXT_LIMIT": 100,
-            "MAX_RECENT_TURNS": 10,
-            "SNIP_THRESHOLD": 100.0,  # disable snip so only micro fires
-            "MICRO_THRESHOLD": 50.0,
-            "COLLAPSE_THRESHOLD": 100.0,  # disable collapse
-            "AUTO_THRESHOLD": 100.0,
-        }
-    )
-    ctx.update("a" * 50)
-    long_result = "sunny" + "x" * 95
+def test_context_triggers_tool_result_budget():
+    ctx = Context(config={"TOOL_RESULT_BUDGET": 200_000})
     ctx.update_with_result({
-        "tool_name": "weather",
-        "params": {"city": "Beijing"},
-        "result_preview": long_result,
+        "tool_name": "bash",
+        "params": {"cmd": "cat big.log"},
+        "result_preview": "x" * 300_000,
     })
-    ctx.update("a" * 50)
-    ctx.update("a" * 50)
-    ctx.update("a" * 20)
-
-    tool_turns = [t for t in ctx._state.recent_turns if t.role == "tool"]
-    assert len(tool_turns) == 1
-    assert tool_turns[0].full_content is None
+    assert ctx._state.compression.tool_result_budget_triggered
 
 
-def test_micro_compact_records_event():
-    ctx = Context(
-        config={
-            "CONTEXT_LIMIT": 100,
-            "MAX_RECENT_TURNS": 10,
-            "SNIP_THRESHOLD": 100.0,
-            "MICRO_THRESHOLD": 50.0,
-            "COLLAPSE_THRESHOLD": 100.0,
-            "AUTO_THRESHOLD": 100.0,
-        }
-    )
-    ctx.update("a" * 50)
-    ctx.update_with_result({
-        "tool_name": "weather",
-        "params": {"city": "Beijing"},
-        "result_preview": "sunny" + "x" * 95,
-    })
-    ctx.update("a" * 50)
-    ctx.update("a" * 50)
-    ctx.update("a" * 20)
-
-    events = [e for e in ctx._state.compression.compact_history if e.layer == "micro"]
-    assert len(events) == 1
+def test_context_triggers_compact_history():
+    ctx = Context(config={"CONTEXT_LIMIT": 500})
+    big = "x" * 200
+    for i in range(50):
+        ctx.update(f"turn {i} {big}")
+    assert ctx._state.compression.compact_history_triggered
+    assert len(ctx.get_messages()) == 1
 
 
-def test_context_collapse_merges_old_turns():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    for i in range(8):
-        ctx.update("a" * 100)
+def test_context_no_orphan_tool_results_after_compaction():
+    from context.utils import _assert_no_orphan_tool_results
+    ctx = Context(config={"KEEP_RECENT_MESSAGES": 10})
+    for i in range(20):
+        ctx.update_with_result({
+            "tool_name": "weather",
+            "params": {"city": "Beijing"},
+            "result_preview": f"result {i}",
+        })
+    _assert_no_orphan_tool_results(ctx.get_messages())
 
-    collapsed = any(t.role == "system" for t in ctx._state.recent_turns)
-    assert collapsed
-    assert ctx._state.compression.collapse_triggered
 
-
-def test_context_collapse_keeps_safe_turns():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    for i in range(8):
+def test_context_compact_manual():
+    ctx = Context(config={"CONTEXT_LIMIT": 500})
+    for i in range(20):
         ctx.update(f"turn {i}")
-
-    # Last 3 turns should be preserved as-is
-    kept_turns = ctx._state.recent_turns[-3:]
-    assert all(t.role == "user" for t in kept_turns)
-
-
-def test_auto_compact_is_noop_without_llm():
-    ctx = Context(config={"CONTEXT_LIMIT": 50, "MAX_RECENT_TURNS": 10})
-    for i in range(10):
-        ctx.update("a" * 100)
-
-    assert ctx._state.compression.auto_triggered
-    auto_events = [e for e in ctx._state.compression.compact_history if e.layer == "auto"]
-    assert len(auto_events) == 1
-    assert "LLM" in auto_events[0].notes or "not available" in auto_events[0].notes.lower()
-
-
-def test_compact_manual_force():
-    ctx = Context(
-        config={
-            "CONTEXT_LIMIT": 100,
-            "MAX_RECENT_TURNS": 10,
-            "SNIP_THRESHOLD": 101.0,
-            "MICRO_THRESHOLD": 101.0,
-            "COLLAPSE_THRESHOLD": 101.0,
-            "AUTO_THRESHOLD": 101.0,
-        }
-    )
-    for i in range(4):
-        ctx.update("a" * 100)
-
-    # No compression triggered automatically (usage == 100%, thresholds at 101%)
-    assert not ctx._state.compression.snip_triggered
-
+    assert not ctx._state.compression.compact_history_triggered
     ctx.compact(force=True)
-    assert ctx._state.compression.snip_triggered
+    assert ctx._state.compression.compact_history_triggered
+    assert len(ctx.get_messages()) == 1
+
+
+def test_context_reactive_compact():
+    messages = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
+    result = reactive_compact(messages)
+    assert len(result) == 6  # 1 summary + 5 tail
+
+
+def test_context_turn_id_preserved():
+    ctx = Context(config={"KEEP_RECENT_MESSAGES": 10})
+    for i in range(20):
+        ctx.update(f"message {i}")
+    for msg in ctx.get_messages():
+        if isinstance(msg.get("content"), str) and not msg["content"].startswith("["):
+            assert "_turn_id" in msg
 
 
 def test_reset_compression_flags():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    for i in range(4):
-        ctx.update("a" * 100)
+    ctx = Context(config={"CONTEXT_LIMIT": 1000, "KEEP_RECENT_MESSAGES": 5})
+    for i in range(20):
+        ctx.update("x" * 100)
 
     assert ctx._state.compression.snip_triggered
     ctx.reset_compression_flags()
     assert not ctx._state.compression.snip_triggered
     assert not ctx._state.compression.micro_triggered
-    assert not ctx._state.compression.collapse_triggered
-    assert not ctx._state.compression.auto_triggered
-
-
-def test_compression_flags_prevent_repeated_trigger():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    for i in range(4):
-        ctx.update("a" * 100)
-
-    snip_events = [e for e in ctx._state.compression.compact_history if e.layer == "snip"]
-    assert len(snip_events) == 1
-
-    # Add more turns; snip should not fire again
-    for i in range(4):
-        ctx.update("a" * 100)
-
-    snip_events = [e for e in ctx._state.compression.compact_history if e.layer == "snip"]
-    assert len(snip_events) == 1
-
-
-def test_compact_event_recorded():
-    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
-    for i in range(4):
-        ctx.update("a" * 100)
-
-    assert len(ctx._state.compression.compact_history) >= 1
-    event = ctx._state.compression.compact_history[0]
-    assert event.usage_before >= event.usage_after
+    assert not ctx._state.compression.compact_history_triggered
+    assert ctx._state.compression.compact_history_failures == 0
+    assert not ctx._state.compression.compact_history_disabled
 
 
 def test_no_compression_when_usage_low():
@@ -485,11 +309,5 @@ def test_no_compression_when_usage_low():
 
     assert not ctx._state.compression.snip_triggered
     assert not ctx._state.compression.micro_triggered
-    assert not ctx._state.compression.collapse_triggered
-    assert not ctx._state.compression.auto_triggered
-
-
-
-
-
-
+    assert not ctx._state.compression.compact_history_triggered
+    assert not ctx._state.compression.tool_result_budget_triggered

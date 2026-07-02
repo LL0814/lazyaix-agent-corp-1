@@ -139,3 +139,23 @@ def snip_compact(
     )
     _assert_no_orphan_tool_results(result)
     return result
+
+
+def reactive_compact(
+    messages: list[dict], adapter: CompactAdapter | None = None
+) -> list[dict]:
+    """Emergency compaction: keep the last 5 raw messages, summarize the rest."""
+    adapter = adapter or RuleBasedCompactAdapter()
+    tail_start = max(0, len(messages) - 5)
+
+    # Pairing protection: if tail starts on a tool_result, include its tool_use.
+    if (
+        tail_start > 0
+        and tail_start < len(messages)
+        and _is_tool_result_message(messages[tail_start])
+        and _message_has_tool_use(messages[tail_start - 1])
+    ):
+        tail_start -= 1
+
+    summary = compact_history(messages[:tail_start], adapter)[0]
+    return [summary] + messages[tail_start:]
