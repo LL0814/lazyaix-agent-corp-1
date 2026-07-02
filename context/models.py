@@ -20,6 +20,7 @@ class TurnSummary(BaseModel):
     turn_id: int
     role: Literal["user", "assistant", "tool"]
     content_preview: str
+    full_content: str | None = None
     tool_calls: list[ToolCallRecord] | None = None
     timestamp: datetime
 
@@ -42,10 +43,33 @@ class TokenStats(BaseModel):
     warning_level: Literal["ok", "high", "critical"] = "ok"
 
 
+class CompactEvent(BaseModel):
+    """Record of a single compression event."""
+
+    timestamp: datetime
+    layer: Literal["snip", "micro", "collapse", "auto"]
+    threshold: float
+    usage_before: float
+    usage_after: float
+    turns_removed: int = 0
+    notes: str = ""
+
+
+class CompressionState(BaseModel):
+    """Tracks which compression layers have fired and their history."""
+
+    snip_triggered: bool = False
+    micro_triggered: bool = False
+    collapse_triggered: bool = False
+    auto_triggered: bool = False
+    compact_history: list[CompactEvent] = Field(default_factory=list)
+
+
 class ContextState(BaseModel):
     """Aggregated conversation context state."""
 
     recent_turns: list[TurnSummary] = Field(default_factory=list)
     topic: TopicState = Field(default_factory=TopicState)
     token_stats: TokenStats = Field(default_factory=TokenStats)
+    compression: CompressionState = Field(default_factory=CompressionState)
     metadata: dict = Field(default_factory=dict)
