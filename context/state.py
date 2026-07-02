@@ -5,7 +5,7 @@ import warnings
 from datetime import datetime
 from math import ceil
 
-from context.models import ContextState, ToolCallRecord, TokenStats, TopicState, TurnSummary
+from context.models import CompactEvent, ContextState, ToolCallRecord, TokenStats, TopicState, TurnSummary
 
 
 class Context:
@@ -84,6 +84,67 @@ class Context:
             warning_level=warning_level,
         )
 
+    def _is_protected(self, turn: TurnSummary) -> bool:
+        """Check if a turn should be protected from snipping."""
+        text = turn.full_content or turn.content_preview or ""
+        return any(keyword in text for keyword in self._PROTECTED_KEYWORDS)
+
+    def _record_compact_event(
+        self,
+        layer: str,
+        turns_removed: int = 0,
+        notes: str = "",
+    ) -> None:
+        """Record a compression event in the compression state."""
+        before = self._state.token_stats.usage_pct
+        self._state.token_stats = self._compute_token_stats()
+        after = self._state.token_stats.usage_pct
+        threshold = getattr(self, f"{layer}_threshold")
+        event = CompactEvent(
+            timestamp=datetime.now(),
+            layer=layer,  # type: ignore[arg-type]
+            threshold=threshold,
+            usage_before=before,
+            usage_after=after,
+            turns_removed=turns_removed,
+            notes=notes,
+        )
+        self._state.compression.compact_history.append(event)
+
+    def _snip_compact(self) -> bool:
+        """Snip old safe turns to reduce context size.
+
+        Removes turns that are not in the safe window and do not contain
+        protected keywords, until usage drops below the snip threshold or
+        no more candidates remain.
+        """
+        if self._state.compression.snip_triggered:
+            return False
+
+        usage = self._state.token_stats.usage_pct
+        if usage < self.snip_threshold:
+            return False
+
+        removed = 0
+        while self._state.token_stats.usage_pct >= self.snip_threshold:
+            candidates = [
+                i
+                for i, turn in enumerate(self._state.recent_turns[:-self.safe_turns])
+                if not self._is_protected(turn)
+            ]
+            if not candidates:
+                break
+            idx = candidates[0]
+            self._state.recent_turns.pop(idx)
+            removed += 1
+            self._state.token_stats = self._compute_token_stats()
+
+        if removed > 0:
+            self._state.compression.snip_triggered = True
+            self._record_compact_event("snip", removed)
+            return True
+        return False
+
     def _infer_topic(self, user_input: str, turn_id: int) -> TopicState:
         """Infer topic state from user input keywords and quoted entities."""
         lowered = user_input.lower()
@@ -131,8 +192,15 @@ class Context:
 
         self._state.topic = self._infer_topic(user_input, self._turn_counter)
         self._state.token_stats = self._compute_token_stats()
+        self._run_compression()
 
         return self._state
+
+    def _run_compression(self) -> None:
+        """Run compression layers in order after each update."""
+        self._state.token_stats = self._compute_token_stats()
+        self._snip_compact()
+        self._state.token_stats = self._compute_token_stats()
 
     def update_with_result(self, result: dict | str) -> ContextState:
         """Record an assistant or tool result turn and update context state."""
@@ -167,6 +235,7 @@ class Context:
         self._state.recent_turns.append(turn)
         self._state.recent_turns = self._state.recent_turns[-self.max_recent_turns :]
         self._state.token_stats = self._compute_token_stats()
+        self._run_compression()
 
         return self._state
 

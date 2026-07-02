@@ -276,3 +276,39 @@ def test_protected_keywords_constant():
         "error",
         "traceback",
     )
+
+
+def test_snip_compact_triggers_at_threshold():
+    ctx = Context(config={"CONTEXT_LIMIT": 100})
+    # Each turn: 100 chars / 4 = 25 tokens. 4 turns = 100 tokens = 100%.
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    assert ctx._state.compression.snip_triggered
+    assert len(ctx._state.recent_turns) <= ctx.safe_turns + 1
+
+
+def test_snip_compact_protects_keywords():
+    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    for i in range(4):
+        ctx.update("a" * 100)
+    ctx.update("write_file test.txt hello")  # protected, in the middle
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    protected = any(
+        "write_file" in (t.full_content or t.content_preview or "")
+        for t in ctx._state.recent_turns
+    )
+    assert protected
+
+
+def test_snip_compact_records_event():
+    ctx = Context(config={"CONTEXT_LIMIT": 100})
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    events = [e for e in ctx._state.compression.compact_history if e.layer == "snip"]
+    assert len(events) == 1
+    assert events[0].turns_removed > 0
+
