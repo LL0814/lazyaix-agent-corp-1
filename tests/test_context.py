@@ -193,9 +193,12 @@ def test_agent_process_turn_integration():
         def retrieve(self, key):
             return self._data.get(key)
 
+    # Avoid calling the real LLM API during this integration test.
+    original_complete = Context.__module__
     context = Context()
     memory = MemoryStub()
     agent = Agent(context=context, memory=memory)
+    agent.model.complete = lambda prompt: "It will be sunny in Beijing."
 
     response = agent.process_turn("what is the weather in Beijing")
 
