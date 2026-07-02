@@ -215,3 +215,64 @@ def test_snapshot_deep_copy_isolated():
 
     assert len(ctx.snapshot().recent_turns) == 1
     assert len(ctx.get()["recent_turns"]) == 1
+
+
+def test_compression_configuration_defaults():
+    ctx = Context()
+
+    assert ctx.preview_length == 120
+    assert ctx.safe_turns == 3
+    assert ctx.snip_threshold == 50.0
+    assert ctx.micro_threshold == 65.0
+    assert ctx.collapse_threshold == 80.0
+    assert ctx.auto_threshold == 90.0
+
+
+def test_compression_configuration_overrides():
+    ctx = Context(
+        config={
+            "PREVIEW_LENGTH": 50,
+            "SAFE_TURNS": 2,
+            "SNIP_THRESHOLD": 55.0,
+            "MICRO_THRESHOLD": 70.0,
+            "COLLAPSE_THRESHOLD": 85.0,
+            "AUTO_THRESHOLD": 95.0,
+        }
+    )
+
+    assert ctx.preview_length == 50
+    assert ctx.safe_turns == 2
+    assert ctx.snip_threshold == 55.0
+    assert ctx.micro_threshold == 70.0
+    assert ctx.collapse_threshold == 85.0
+    assert ctx.auto_threshold == 95.0
+
+
+def test_non_positive_safe_turns_fallback():
+    with pytest.warns(UserWarning, match="SAFE_TURNS must be positive"):
+        ctx = Context(config={"SAFE_TURNS": 0})
+
+    assert ctx.safe_turns == 3
+
+
+def test_preview_length_affects_truncation():
+    ctx = Context(config={"PREVIEW_LENGTH": 10})
+    state = ctx.update("x" * 100)
+
+    assert state.recent_turns[0].content_preview == "x" * 10
+
+
+def test_make_preview_method():
+    ctx = Context(config={"PREVIEW_LENGTH": 7})
+
+    assert ctx._make_preview("hello world") == "hello w"
+
+
+def test_protected_keywords_constant():
+    assert Context._PROTECTED_KEYWORDS == (
+        "write_file",
+        "edit_file",
+        "edit",
+        "error",
+        "traceback",
+    )

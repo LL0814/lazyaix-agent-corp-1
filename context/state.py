@@ -11,6 +11,8 @@ from context.models import ContextState, ToolCallRecord, TokenStats, TopicState,
 class Context:
     """Manages conversation context state."""
 
+    _PROTECTED_KEYWORDS = ("write_file", "edit_file", "edit", "error", "traceback")
+
     def __init__(self, config: dict | None = None):
         config = config or {}
 
@@ -34,8 +36,22 @@ class Context:
             warnings.warn("MAX_RECENT_TURNS must be positive; falling back to 5")
             self.max_recent_turns = 5
 
+        self.preview_length = int(config.get("PREVIEW_LENGTH", 120))
+        self.safe_turns = int(config.get("SAFE_TURNS", 3))
+        if self.safe_turns <= 0:
+            warnings.warn("SAFE_TURNS must be positive; falling back to 3")
+            self.safe_turns = 3
+
+        self.snip_threshold = float(config.get("SNIP_THRESHOLD", 50.0))
+        self.micro_threshold = float(config.get("MICRO_THRESHOLD", 65.0))
+        self.collapse_threshold = float(config.get("COLLAPSE_THRESHOLD", 80.0))
+        self.auto_threshold = float(config.get("AUTO_THRESHOLD", 90.0))
+
         self._state = ContextState()
         self._turn_counter = 0
+
+    def _make_preview(self, text: str) -> str:
+        return text[: self.preview_length]
 
     def _estimate_tokens(self) -> int:
         """Estimate tokens from recent turns' content previews.
@@ -104,7 +120,7 @@ class Context:
         turn = TurnSummary(
             turn_id=self._turn_counter,
             role="user",
-            content_preview=user_input[:120],
+            content_preview=self._make_preview(user_input),
             timestamp=datetime.now(),
         )
         self._state.recent_turns.append(turn)
@@ -124,7 +140,7 @@ class Context:
             params = result.get("params", {})
             result_preview = result.get("result_preview")
             if result_preview is None:
-                result_preview = str(result)[:120]
+                result_preview = self._make_preview(str(result))
 
             tool_call = ToolCallRecord(
                 tool_name=tool_name,
@@ -134,7 +150,7 @@ class Context:
             turn = TurnSummary(
                 turn_id=self._turn_counter,
                 role="tool",
-                content_preview=result_preview[:120],
+                content_preview=self._make_preview(result_preview),
                 tool_calls=[tool_call],
                 timestamp=datetime.now(),
             )
@@ -143,7 +159,7 @@ class Context:
             turn = TurnSummary(
                 turn_id=self._turn_counter,
                 role="assistant",
-                content_preview=text[:120],
+                content_preview=self._make_preview(text),
                 timestamp=datetime.now(),
             )
 
