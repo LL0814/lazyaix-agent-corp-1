@@ -414,6 +414,43 @@ def test_reset_compression_flags():
     assert not ctx._state.compression.auto_triggered
 
 
+def test_compression_flags_prevent_repeated_trigger():
+    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    snip_events = [e for e in ctx._state.compression.compact_history if e.layer == "snip"]
+    assert len(snip_events) == 1
+
+    # Add more turns; snip should not fire again
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    snip_events = [e for e in ctx._state.compression.compact_history if e.layer == "snip"]
+    assert len(snip_events) == 1
+
+
+def test_compact_event_recorded():
+    ctx = Context(config={"CONTEXT_LIMIT": 100, "MAX_RECENT_TURNS": 10})
+    for i in range(4):
+        ctx.update("a" * 100)
+
+    assert len(ctx._state.compression.compact_history) >= 1
+    event = ctx._state.compression.compact_history[0]
+    assert event.usage_before >= event.usage_after
+
+
+def test_no_compression_when_usage_low():
+    ctx = Context()
+    ctx.update("short")
+
+    assert not ctx._state.compression.snip_triggered
+    assert not ctx._state.compression.micro_triggered
+    assert not ctx._state.compression.collapse_triggered
+    assert not ctx._state.compression.auto_triggered
+
+
+
 
 
 
