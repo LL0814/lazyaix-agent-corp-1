@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .DS_Store
 .env
+AGENTCONTEXT_EXECUTION_PLAN_PYTHON.md
