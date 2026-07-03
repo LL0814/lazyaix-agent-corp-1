@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import uuid
-from typing import Any
 
 from events.bus import EventBus
 from events.schema import Event, EventType
 from workflow.graph import TaskGraph
 from workflow.state import TaskStatus, Workflow, WorkflowStatus
-
-logger = logging.getLogger(__name__)
 
 
 class WorkflowCoordinator:
@@ -32,6 +28,8 @@ class WorkflowCoordinator:
         self._workflows[workflow.workflow_id] = workflow
 
     def create_future(self, workflow_id: str) -> asyncio.Future:
+        """Create a future that will be resolved when the identified workflow completes."""
+        # workflow_id identifies which workflow this future is tied to.
         return asyncio.get_event_loop().create_future()
 
     def set_completion_future(
@@ -50,6 +48,8 @@ class WorkflowCoordinator:
         workflow = self._workflows.get(event.workflow_id)
         if workflow is None or event.task_id is None:
             return
+        if workflow.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED):
+            return  # ignore events for already-terminal workflows
         graph = TaskGraph(workflow)
 
         task = workflow.tasks.get(event.task_id)
@@ -66,6 +66,8 @@ class WorkflowCoordinator:
         workflow = self._workflows.get(event.workflow_id)
         if workflow is None or event.task_id is None:
             return
+        if workflow.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED):
+            return  # ignore events for already-terminal workflows
         graph = TaskGraph(workflow)
 
         task = workflow.tasks.get(event.task_id)
@@ -76,7 +78,6 @@ class WorkflowCoordinator:
         if retryable and task.retry_count < self.max_retries:
             task.retry_count += 1
             task.status = TaskStatus.RETRYING
-            task.status = TaskStatus.READY
             await self._publish_event_for_task(task, workflow)
             return
 
