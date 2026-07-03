@@ -119,3 +119,62 @@ async def test_scheduler_unknown_capability():
     assert len(failed) == 1
     assert "Unknown capability" in failed[0].payload["error"]
     await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_dispatches_ready_tasks_concurrently():
+    bus = InMemoryEventBus()
+    done = asyncio.Event()
+    calls = []
+    handler_count = 2
+
+    async def slow_handler(event: Event):
+        calls.append(("start", event.task_id, asyncio.get_event_loop().time()))
+        await asyncio.sleep(0.1)
+        calls.append(("end", event.task_id, asyncio.get_event_loop().time()))
+        if len([c for c in calls if c[0] == "end"]) == handler_count:
+            done.set()
+
+    scheduler = Scheduler(
+        bus,
+        {
+            "cap_a": slow_handler,
+            "cap_b": slow_handler,
+        },
+    )
+    bus.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)
+
+    async def assigned_noop(event: Event) -> None:
+        return None
+
+    bus.subscribe(EventType.TASK_ASSIGNED, assigned_noop)
+    await bus.start()
+
+    start_time = asyncio.get_event_loop().time()
+    await bus.publish(
+        Event(
+            event_id="e1",
+            event_type=EventType.TASK_READY,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="t1",
+            target_capability="cap_a",
+        )
+    )
+    await bus.publish(
+        Event(
+            event_id="e2",
+            event_type=EventType.TASK_READY,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="t2",
+            target_capability="cap_b",
+        )
+    )
+
+    await asyncio.wait_for(done.wait(), timeout=1.0)
+    elapsed = asyncio.get_event_loop().time() - start_time
+
+    assert len([c for c in calls if c[0] == "end"]) == handler_count
+    assert elapsed < 0.2
+    await bus.stop()

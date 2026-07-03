@@ -127,3 +127,18 @@ def test_supervisor_custom_max_retries_from_config(monkeypatch):
     agent.process_turn("write a poem")
 
     assert captured.get("max_retries") == 5
+
+
+def test_supervisor_duplicate_task_id_graceful_error(monkeypatch):
+    plan = (
+        '{"action": "delegate", "tasks": ['
+        '{"task_id": "dup_001", "task_type": "research", "target_capability": "researcher", '
+        '"instructions": "first task", "dependencies": [], "input_refs": [], "required_for_completion": true},'
+        '{"task_id": "dup_001", "task_type": "write", "target_capability": "writer", '
+        '"instructions": "duplicate task", "dependencies": [], "input_refs": [], "required_for_completion": true}'
+        ']}'
+    )
+    agent = make_agent(plan, monkeypatch)
+    response = agent.process_turn("duplicate task ids")
+    assert response.startswith("[Workflow planning error]")
+    assert "Duplicate task_id" in response

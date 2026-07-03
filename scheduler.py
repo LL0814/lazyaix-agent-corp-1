@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Awaitable, Callable
@@ -63,4 +64,4 @@ class Scheduler:
                 target_capability=capability,
             )
         )
-        await handler(event)
+        asyncio.create_task(handler(event))
