@@ -47,13 +47,39 @@ def micro_compact(messages: list[dict], keep_recent: int = KEEP_RECENT_TOOL_RESU
     return messages
 
 
-def compact_history(messages: list[dict], adapter: CompactAdapter | None = None) -> list[dict]:
+class CompactCircuitBreaker:
+    """Open after MAX consecutive failures to avoid burning API credits."""
+
+    def __init__(self, max_failures: int = 3):
+        self.failures = 0
+        self.max_failures = max_failures
+
+    def call(self, fn, *args, **kwargs):
+        if self.failures >= self.max_failures:
+            raise RuntimeError(
+                f"AutoCompact circuit breaker open: {self.failures} consecutive failures"
+            )
+        try:
+            result = fn(*args, **kwargs)
+            self.failures = 0
+            return result
+        except Exception:
+            self.failures += 1
+            raise
+
+
+def compact_history(
+    messages: list[dict],
+    adapter: CompactAdapter | None = None,
+    breaker: CompactCircuitBreaker | None = None,
+) -> list[dict]:
     """Persist the full transcript and replace all messages with a summary."""
     adapter = adapter or RuleBasedCompactAdapter()
+    if breaker is None:
+        breaker = CompactCircuitBreaker()
     transcript_path = write_transcript(messages)
-    try:
-        summary = adapter.summarize_history(messages)
-    except Exception:
+    summary = breaker.call(adapter.summarize_history, messages)
+    if not summary:
         summary = "(empty summary)"
     return [{
         "role": "user",

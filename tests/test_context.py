@@ -303,6 +303,13 @@ def test_reset_compression_flags():
     assert not ctx._state.compression.compact_history_disabled
 
 
+def test_reset_compression_flags_resets_breaker():
+    ctx = Context()
+    ctx._compact_breaker.failures = 3
+    ctx.reset_compression_flags()
+    assert ctx._compact_breaker.failures == 0
+
+
 def test_no_compression_when_usage_low():
     ctx = Context()
     ctx.update("short")

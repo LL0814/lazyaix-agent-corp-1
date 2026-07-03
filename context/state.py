@@ -7,6 +7,7 @@ from math import ceil
 
 from context.adapter import RuleBasedCompactAdapter
 from context.compaction import (
+    CompactCircuitBreaker,
     compact_history,
     micro_compact,
     snip_compact,
@@ -16,6 +17,7 @@ from context.config import (
     CONTEXT_LIMIT,
     KEEP_RECENT_MESSAGES,
     KEEP_RECENT_TOOL_RESULTS,
+    MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
     TOOL_RESULT_BUDGET,
 )
 from context.models import (
@@ -49,6 +51,13 @@ class Context:
         )
         self.tool_result_budget = self._positive_int(
             config, "TOOL_RESULT_BUDGET", TOOL_RESULT_BUDGET
+        )
+        self._compact_breaker = CompactCircuitBreaker(
+            self._positive_int(
+                config,
+                "MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES",
+                MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
+            )
         )
 
         self.compact_adapter = compact_adapter or RuleBasedCompactAdapter()
@@ -242,7 +251,9 @@ class Context:
         ):
             path = self._state.compression.compact_history_path
             try:
-                self._messages = compact_history(self._messages, self.compact_adapter)
+                self._messages = compact_history(
+                    self._messages, self.compact_adapter, self._compact_breaker
+                )
                 self._state.compression.compact_history_triggered = True
                 self._state.compression.compact_history_failures = 0
                 self._state.compression.compact_history_path = self._messages[0].get(
@@ -393,7 +404,9 @@ class Context:
         if force or estimate_size(self._messages) > self.context_limit:
             try:
                 before = estimate_size(self._messages)
-                self._messages = compact_history(self._messages, self.compact_adapter)
+                self._messages = compact_history(
+                    self._messages, self.compact_adapter, self._compact_breaker
+                )
                 self._state.compression.compact_history_triggered = True
                 self._state.compression.compact_history_path = self._messages[0].get(
                     "_transcript_path"
@@ -421,6 +434,7 @@ class Context:
         self._state.compression.compact_history_triggered = False
         self._state.compression.compact_history_failures = 0
         self._state.compression.compact_history_disabled = False
+        self._compact_breaker.failures = 0
 
     def reset(self) -> None:
         """Reset the context state."""
