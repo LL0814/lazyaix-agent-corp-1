@@ -21,7 +21,11 @@ def make_wf(*tasks: Task) -> Workflow:
 async def test_coordinator_publishes_ready_tasks():
     bus = InMemoryEventBus()
     ready_events = []
-    bus.subscribe(EventType.TASK_READY, lambda e: ready_events.append(e))
+
+    async def collect_ready(event: Event):
+        ready_events.append(event)
+
+    bus.subscribe(EventType.TASK_READY, collect_ready)
     await bus.start()
 
     coord = WorkflowCoordinator(bus)
@@ -39,8 +43,15 @@ async def test_coordinator_triggers_downstream():
     bus = InMemoryEventBus()
     ready_events = []
     completed_events = []
-    bus.subscribe(EventType.TASK_READY, lambda e: ready_events.append(e))
-    bus.subscribe(EventType.WORKFLOW_COMPLETED, lambda e: completed_events.append(e))
+
+    async def collect_ready(event: Event):
+        ready_events.append(event)
+
+    async def collect_completed(event: Event):
+        completed_events.append(event)
+
+    bus.subscribe(EventType.TASK_READY, collect_ready)
+    bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
     coord = WorkflowCoordinator(bus)
@@ -71,7 +82,11 @@ async def test_coordinator_triggers_downstream():
 async def test_coordinator_workflow_completed():
     bus = InMemoryEventBus()
     completed = []
-    bus.subscribe(EventType.WORKFLOW_COMPLETED, lambda e: completed.append(e))
+
+    async def collect_completed(event: Event):
+        completed.append(event)
+
+    bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
     coord = WorkflowCoordinator(bus)
@@ -100,8 +115,15 @@ async def test_coordinator_retries_failed_task():
     bus = InMemoryEventBus()
     ready_events = []
     completed_events = []
-    bus.subscribe(EventType.TASK_READY, lambda e: ready_events.append(e))
-    bus.subscribe(EventType.WORKFLOW_COMPLETED, lambda e: completed_events.append(e))
+
+    async def collect_ready(event: Event):
+        ready_events.append(event)
+
+    async def collect_completed(event: Event):
+        completed_events.append(event)
+
+    bus.subscribe(EventType.TASK_READY, collect_ready)
+    bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
     coord = WorkflowCoordinator(bus)
@@ -152,7 +174,11 @@ async def test_coordinator_retries_failed_task():
 async def test_coordinator_blocks_downstream_on_failure():
     bus = InMemoryEventBus()
     failed_events = []
-    bus.subscribe(EventType.WORKFLOW_FAILED, lambda e: failed_events.append(e))
+
+    async def collect_failed(event: Event):
+        failed_events.append(event)
+
+    bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
     coord = WorkflowCoordinator(bus)
@@ -182,10 +208,53 @@ async def test_coordinator_blocks_downstream_on_failure():
 
 
 @pytest.mark.asyncio
+async def test_coordinator_blocks_transitively_on_failure():
+    bus = InMemoryEventBus()
+    failed_events = []
+
+    async def collect_failed(event: Event):
+        failed_events.append(event)
+
+    bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
+    await bus.start()
+
+    coord = WorkflowCoordinator(bus)
+    t1 = Task("t1", "work", "worker", "do work")
+    t2 = Task("t2", "work", "worker", "do more", dependencies=["t1"])
+    t3 = Task("t3", "work", "worker", "do even more", dependencies=["t2"])
+    wf = make_wf(t1, t2, t3)
+    await coord.start_workflow(wf)
+
+    await coord.handle_task_failed(
+        Event(
+            event_id="e1",
+            event_type=EventType.AGENT_FAILED,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="t1",
+            source="worker",
+            payload={"error": "fatal", "retryable": False},
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert wf.tasks["t1"].status == TaskStatus.FAILED
+    assert wf.tasks["t2"].status == TaskStatus.BLOCKED
+    assert wf.tasks["t3"].status == TaskStatus.BLOCKED
+    assert wf.status == WorkflowStatus.FAILED
+    assert len(failed_events) == 1
+    await bus.stop()
+
+
+@pytest.mark.asyncio
 async def test_coordinator_ignores_duplicate_completed():
     bus = InMemoryEventBus()
     completed_events = []
-    bus.subscribe(EventType.WORKFLOW_COMPLETED, lambda e: completed_events.append(e))
+
+    async def collect_completed(event: Event):
+        completed_events.append(event)
+
+    bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
     coord = WorkflowCoordinator(bus)
@@ -242,7 +311,11 @@ async def test_coordinator_future_resolved_on_completion():
 async def test_coordinator_duplicate_workflow_failed_ignored():
     bus = InMemoryEventBus()
     failed_events = []
-    bus.subscribe(EventType.WORKFLOW_FAILED, lambda e: failed_events.append(e))
+
+    async def collect_failed(event: Event):
+        failed_events.append(event)
+
+    bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
     coord = WorkflowCoordinator(bus)
@@ -272,7 +345,11 @@ async def test_coordinator_duplicate_workflow_failed_ignored():
 async def test_coordinator_retry_exhaustion_blocks_downstream():
     bus = InMemoryEventBus()
     failed_events = []
-    bus.subscribe(EventType.WORKFLOW_FAILED, lambda e: failed_events.append(e))
+
+    async def collect_failed(event: Event):
+        failed_events.append(event)
+
+    bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
     coord = WorkflowCoordinator(bus, max_retries=1)
@@ -312,4 +389,54 @@ async def test_coordinator_retry_exhaustion_blocks_downstream():
     assert wf.tasks["w1"].status == TaskStatus.BLOCKED
     assert wf.status == WorkflowStatus.FAILED
     assert len(failed_events) == 1
+    await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_respects_max_retries():
+    bus = InMemoryEventBus()
+    ready_events = []
+
+    async def collect_ready(event: Event):
+        ready_events.append(event)
+
+    bus.subscribe(EventType.TASK_READY, collect_ready)
+    await bus.start()
+
+    coord = WorkflowCoordinator(bus, max_retries=3)
+    wf = make_wf(Task("t1", "work", "worker", "do work"))
+    await coord.start_workflow(wf)
+    await asyncio.sleep(0.05)
+
+    # Initial dispatch + 3 retries = 4 ready events before exhaustion.
+    for _ in range(3):
+        await coord.handle_task_failed(
+            Event(
+                event_id="e-retry",
+                event_type=EventType.AGENT_FAILED,
+                trace_id="tr-1",
+                workflow_id="wf-1",
+                task_id="t1",
+                source="worker",
+                payload={"error": "oops", "retryable": True},
+            )
+        )
+        await asyncio.sleep(0.05)
+
+    await coord.handle_task_failed(
+        Event(
+            event_id="e-fatal",
+            event_type=EventType.AGENT_FAILED,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="t1",
+            source="worker",
+            payload={"error": "final", "retryable": True},
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert wf.tasks["t1"].status == TaskStatus.FAILED
+    assert wf.tasks["t1"].retry_count == 3
+    assert len(ready_events) == 4
     await bus.stop()

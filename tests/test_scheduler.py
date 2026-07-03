@@ -22,7 +22,11 @@ async def test_scheduler_routes_researcher():
         bus, {"researcher": researcher_handler, "writer": writer_handler}
     )
     bus.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)
-    bus.subscribe(EventType.TASK_ASSIGNED, lambda e: None)
+
+    async def assigned_noop(event: Event) -> None:
+        return None
+
+    bus.subscribe(EventType.TASK_ASSIGNED, assigned_noop)
     await bus.start()
 
     await bus.publish(
@@ -47,11 +51,15 @@ async def test_scheduler_no_duplicate_dispatch():
     calls = []
 
     async def researcher_handler(event: Event):
-        calls.append(event.task_id)
+        calls.append((event.task_id, event.metadata.get("retry_count", 0)))
 
     scheduler = Scheduler(bus, {"researcher": researcher_handler})
     bus.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)
-    bus.subscribe(EventType.TASK_ASSIGNED, lambda e: None)
+
+    async def assigned_noop(event: Event) -> None:
+        return None
+
+    bus.subscribe(EventType.TASK_ASSIGNED, assigned_noop)
     await bus.start()
 
     event = Event(
@@ -66,7 +74,21 @@ async def test_scheduler_no_duplicate_dispatch():
     await bus.publish(event)
     await asyncio.sleep(0.05)
 
-    assert calls == ["r1"]
+    assert calls == [("r1", 0)]
+
+    retry_event = Event(
+        event_id="e2",
+        event_type=EventType.TASK_READY,
+        trace_id="tr-1",
+        workflow_id="wf-1",
+        task_id="r1",
+        target_capability="researcher",
+        metadata={"retry_count": 1},
+    )
+    await bus.publish(retry_event)
+    await asyncio.sleep(0.05)
+
+    assert calls == [("r1", 0), ("r1", 1)]
     await bus.stop()
 
 
@@ -74,8 +96,12 @@ async def test_scheduler_no_duplicate_dispatch():
 async def test_scheduler_unknown_capability():
     bus = InMemoryEventBus()
     failed = []
+
+    async def collect_failed(event: Event) -> None:
+        failed.append(event)
+
     bus.subscribe(EventType.TASK_READY, Scheduler(bus, {}).handle_task_ready)
-    bus.subscribe(EventType.AGENT_FAILED, lambda e: failed.append(e))
+    bus.subscribe(EventType.AGENT_FAILED, collect_failed)
     await bus.start()
 
     await bus.publish(

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class InMemoryEventBus:
-    """Process-local event bus. Each event type has its own queue and consumer task."""
+    """Process-local event bus. Each event type/handler has its own queue and consumer task."""
 
     def __init__(self):
         self._handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}

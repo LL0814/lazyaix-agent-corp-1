@@ -157,6 +157,11 @@ class Agent:
         """Convert LLM task plan into Task objects."""
         tasks: dict[str, Task] = {}
         for item in tasks_data:
+            if not isinstance(item, dict):
+                raise TaskGraphError(f"Task entry must be an object, got {type(item).__name__}")
+            for field in ("task_id", "target_capability", "instructions"):
+                if field not in item:
+                    raise TaskGraphError(f"Task missing required field '{field}': {item}")
             task = Task(
                 task_id=item["task_id"],
                 task_type=item.get("task_type", "generic"),
@@ -210,7 +215,8 @@ class Agent:
     async def _process_turn_event_driven(self, user_input: str) -> str:
         """Run the turn using event-driven task scheduling."""
         event_bus = InMemoryEventBus()
-        coordinator = WorkflowCoordinator(event_bus)
+        max_retries = int(self.config.get("MAX_RETRIES", "2"))
+        coordinator = WorkflowCoordinator(event_bus, max_retries=max_retries)
         scheduler = Scheduler(
             event_bus,
             {
@@ -232,17 +238,20 @@ class Agent:
             if decision.get("action") == "direct":
                 return decision.get("response", "")
 
-            workflow = Workflow(
-                workflow_id=str(uuid.uuid4()),
-                trace_id=str(uuid.uuid4()),
-                user_input=user_input,
-                tasks=self._build_tasks_from_plan(decision.get("tasks", [])),
-            )
+            try:
+                workflow = Workflow(
+                    workflow_id=str(uuid.uuid4()),
+                    trace_id=str(uuid.uuid4()),
+                    user_input=user_input,
+                    tasks=self._build_tasks_from_plan(decision.get("tasks", [])),
+                )
 
-            loop = asyncio.get_event_loop()
-            future = loop.create_future()
-            coordinator.set_completion_future(workflow.workflow_id, future)
-            await coordinator.start_workflow(workflow)
+                loop = asyncio.get_event_loop()
+                future = loop.create_future()
+                coordinator.set_completion_future(workflow.workflow_id, future)
+                await coordinator.start_workflow(workflow)
+            except TaskGraphError as exc:
+                return f"[Workflow planning error] {exc}"
             await future
 
             return self._finalize_workflow(workflow, user_input)

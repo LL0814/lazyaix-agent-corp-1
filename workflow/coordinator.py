@@ -30,7 +30,7 @@ class WorkflowCoordinator:
     def create_future(self, workflow_id: str) -> asyncio.Future:
         """Create a future that will be resolved when the identified workflow completes."""
         # workflow_id identifies which workflow this future is tied to.
-        return asyncio.get_event_loop().create_future()
+        return asyncio.get_running_loop().create_future()
 
     def set_completion_future(
         self, workflow_id: str, future: asyncio.Future
@@ -87,9 +87,19 @@ class WorkflowCoordinator:
 
     def _block_downstream(self, workflow: Workflow, failed_task_id: str) -> None:
         graph = TaskGraph(workflow)
-        for task in workflow.tasks.values():
-            if failed_task_id in task.dependencies and task.status == TaskStatus.PENDING:
-                graph.mark_blocked(task.task_id)
+        terminal = {TaskStatus.FAILED, TaskStatus.BLOCKED}
+        changed = True
+        while changed:
+            changed = False
+            for task in workflow.tasks.values():
+                if task.status != TaskStatus.PENDING:
+                    continue
+                if any(
+                    workflow.tasks[dep].status in terminal
+                    for dep in task.dependencies
+                ):
+                    graph.mark_blocked(task.task_id)
+                    changed = True
 
     async def _publish_ready_tasks(self, workflow: Workflow) -> None:
         graph = TaskGraph(workflow)

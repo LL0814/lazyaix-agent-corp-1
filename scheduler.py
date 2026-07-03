@@ -28,7 +28,8 @@ class Scheduler:
             logger.error("task.ready event without task_id: %s", event.event_id)
             return
 
-        dispatch_key = f"{event.workflow_id}:{task_id}"
+        retry_count = event.metadata.get("retry_count", 0)
+        dispatch_key = f"{event.workflow_id}:{task_id}:{retry_count}"
         if dispatch_key in self._dispatched:
             logger.debug("Task %s already dispatched, ignoring", task_id)
             return

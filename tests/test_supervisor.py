@@ -1,6 +1,7 @@
 import pytest
 
 from agent import Agent
+from workflow.coordinator import WorkflowCoordinator
 
 
 class StubMemory:
@@ -68,3 +69,39 @@ def test_supervisor_event_driven_researcher_then_writer(monkeypatch):
     agent = make_agent(plan, monkeypatch)
     response = agent.process_turn("research and report")
     assert "[Writer]" in response
+
+
+def test_supervisor_invalid_task_graph_graceful_error(monkeypatch):
+    plan = (
+        '{"action": "delegate", "tasks": ['
+        '{"task_id": "bad_001", "task_type": "write", '
+        '"instructions": "missing capability", "dependencies": [], "input_refs": [], "required_for_completion": true}'
+        ']}'
+    )
+    agent = make_agent(plan, monkeypatch)
+    response = agent.process_turn("do something impossible")
+    assert response.startswith("[Workflow planning error]")
+
+
+def test_supervisor_custom_max_retries_from_config(monkeypatch):
+    monkeypatch.setenv("MAX_RETRIES", "5")
+    captured = {}
+
+    original_init = WorkflowCoordinator.__init__
+
+    def spy_init(self, event_bus, max_retries=2):
+        captured["max_retries"] = max_retries
+        original_init(self, event_bus, max_retries)
+
+    monkeypatch.setattr(WorkflowCoordinator, "__init__", spy_init)
+
+    plan = (
+        '{"action": "delegate", "tasks": ['
+        '{"task_id": "write_001", "task_type": "write", "target_capability": "writer", '
+        '"instructions": "write poem", "dependencies": [], "input_refs": [], "required_for_completion": true}'
+        ']}'
+    )
+    agent = make_agent(plan, monkeypatch)
+    agent.process_turn("write a poem")
+
+    assert captured.get("max_retries") == 5
