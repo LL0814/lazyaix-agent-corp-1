@@ -5,6 +5,7 @@ from context.config import (
     CONTEXT_LIMIT,
     KEEP_RECENT_MESSAGES,
     KEEP_RECENT_TOOL_RESULTS,
+    MAX_REACTIVE_RETRIES,
     PERSIST_THRESHOLD,
     TOOL_RESULT_BUDGET,
 )
@@ -18,7 +19,7 @@ from context.utils import (
 )
 
 
-def _collect_tool_result_blocks(messages: list[dict]):
+def _collect_tool_result_blocks(messages: list[dict]) -> list[tuple[int, int, dict]]:
     """Collect all tool_result blocks with their (msg_idx, block_idx, block)."""
     blocks = []
     for msg_idx, msg in enumerate(messages):
@@ -170,7 +171,10 @@ def snip_compact(
 def reactive_compact(
     messages: list[dict], adapter: CompactAdapter | None = None
 ) -> list[dict]:
-    """Emergency compaction: keep the last 5 raw messages, summarize the rest."""
+    """Emergency compaction: keep the last 5 raw messages, summarize the rest.
+
+    Retries the summary up to MAX_REACTIVE_RETRIES times on failure.
+    """
     adapter = adapter or RuleBasedCompactAdapter()
     tail_start = max(0, len(messages) - 5)
 
@@ -183,5 +187,16 @@ def reactive_compact(
     ):
         tail_start -= 1
 
-    summary = compact_history(messages[:tail_start], adapter)[0]
-    return [summary] + messages[tail_start:]
+    prefix = messages[:tail_start]
+    if not prefix:
+        return list(messages)
+
+    last_error: Exception | None = None
+    for _ in range(max(1, MAX_REACTIVE_RETRIES + 1)):
+        try:
+            summary = compact_history(prefix, adapter)[0]
+            summary["content"] = f"[Reactive compact]\n\n{summary['content']}"
+            return [summary] + messages[tail_start:]
+        except Exception as exc:
+            last_error = exc
+    raise last_error or RuntimeError("reactive_compact failed")

@@ -35,8 +35,6 @@ from context.utils import estimate_size
 class Context:
     """Manages conversation context state with four-layer compaction."""
 
-    _PROTECTED_KEYWORDS = ("write_file", "edit_file", "error", "traceback")
-
     def __init__(self, config: dict | None = None, compact_adapter=None):
         config = config or {}
 
@@ -122,13 +120,16 @@ class Context:
         """Convert a message dict back to a TurnSummary."""
         role = msg.get("role", "user")
         content = msg.get("content")
+        text = ""
+        tool_calls = None
+
         if isinstance(content, str):
             text = content
-            tool_calls = None
-        else:
-            # content is a list of blocks
+            # Placeholder messages from compaction layers are system summaries.
+            if text.startswith("[snipped ") or text.startswith("[Compacted]") or text.startswith("[Reactive compact]"):
+                role = "system"
+        elif isinstance(content, list):
             text = str(content)
-            tool_calls = None
             if role == "assistant":
                 tool_calls = [
                     ToolCallRecord(
@@ -140,7 +141,6 @@ class Context:
                     if isinstance(block, dict) and block.get("type") == "tool_use"
                 ]
             elif role == "user":
-                # tool_result container → treat as tool role
                 result_blocks = [
                     block for block in content
                     if isinstance(block, dict) and block.get("type") == "tool_result"
@@ -158,6 +158,7 @@ class Context:
                             result_preview=text,
                         )
                     ]
+
         return TurnSummary(
             turn_id=msg.get("_turn_id", 0),
             role=role,  # type: ignore[arg-type]
@@ -181,11 +182,16 @@ class Context:
         self._state.recent_turns = self._state.recent_turns[-self.max_recent_turns :]
 
     def _compute_token_stats(self) -> TokenStats:
-        """Compute current token usage statistics from _messages."""
+        """Compute current usage statistics from _messages.
+
+        CONTEXT_LIMIT is expressed in characters, so usage_pct is based on
+        character count. estimated_tokens keeps the traditional token estimate
+        (characters / 4) for display purposes.
+        """
         estimated_chars = sum(len(str(m)) for m in self._messages)
         estimated_tokens = max(0, ceil(estimated_chars / 4))
         usage_pct = (
-            (estimated_tokens / self.context_limit * 100)
+            (estimated_chars / self.context_limit * 100)
             if self.context_limit > 0
             else 0.0
         )
@@ -268,7 +274,8 @@ class Context:
                     estimate_size(self._messages),
                     notes=f"transcript: {self._state.compression.compact_history_path}",
                 )
-            except Exception:
+            except Exception as exc:
+                warnings.warn(f"compact_history failed: {exc}")
                 self._state.compression.compact_history_failures += 1
                 if (
                     self._state.compression.compact_history_failures
@@ -418,7 +425,8 @@ class Context:
                     estimate_size(self._messages),
                     notes=f"manual compact; transcript: {self._state.compression.compact_history_path}",
                 )
-            except Exception:
+            except Exception as exc:
+                warnings.warn(f"compact_history failed: {exc}")
                 self._state.compression.compact_history_failures += 1
                 if self._state.compression.compact_history_failures >= 3:
                     self._state.compression.compact_history_disabled = True
@@ -441,6 +449,7 @@ class Context:
         self._state = ContextState()
         self._turn_counter = 0
         self._messages = []
+        self._compact_breaker.failures = 0
 
     def snapshot(self) -> ContextState:
         """Return a deep copy of the current context state."""

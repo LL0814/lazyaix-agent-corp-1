@@ -128,8 +128,8 @@ def test_get_before_update_returns_defaults():
 
 
 def test_warning_level_ok():
-    ctx = Context(config={"CONTEXT_LIMIT": 100})
-    state = ctx.update("x" * 100)
+    ctx = Context(config={"CONTEXT_LIMIT": 500})
+    state = ctx.update("x" * 20)
 
     assert state.token_stats.warning_level == "ok"
     assert state.token_stats.usage_pct < 50.0
@@ -265,7 +265,7 @@ def test_context_no_orphan_tool_results_after_compaction():
 
 
 def test_context_compact_manual():
-    ctx = Context(config={"CONTEXT_LIMIT": 500})
+    ctx = Context(config={"CONTEXT_LIMIT": 5000})
     for i in range(20):
         ctx.update(f"turn {i}")
     assert not ctx._state.compression.compact_history_triggered

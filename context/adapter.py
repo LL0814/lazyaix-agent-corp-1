@@ -1,5 +1,6 @@
 """Adapter interface for LLM-based compaction summaries."""
 
+import re
 from typing import Protocol
 
 
@@ -58,5 +59,4 @@ class RuleBasedCompactAdapter:
 
     @staticmethod
     def _extract_quoted(text: str) -> list[str]:
-        import re
         return re.findall(r"['\"](.*?)['\"]", text)

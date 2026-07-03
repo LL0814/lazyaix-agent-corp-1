@@ -1,5 +1,7 @@
 """Tests for context compaction utilities."""
 
+import pytest
+
 from context.utils import (
     _assert_no_orphan_tool_results,
     _is_tool_result_message,
@@ -16,7 +18,7 @@ def test_estimate_size_empty():
 
 def test_estimate_size_single_message():
     messages = [{"role": "user", "content": "hello world"}]
-    assert estimate_size(messages) == len(str(messages)) // 4
+    assert estimate_size(messages) == len(str(messages))
 
 
 def test_message_has_tool_use_true():
@@ -62,11 +64,8 @@ def test_assert_no_orphan_tool_results_raises():
     messages = [
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "sunny"}]},
     ]
-    try:
+    with pytest.raises(RuntimeError):
         _assert_no_orphan_tool_results(messages)
-    except AssertionError:
-        return
-    raise AssertionError("expected AssertionError")
 
 
 def test_write_transcript_creates_file(tmp_path, monkeypatch):

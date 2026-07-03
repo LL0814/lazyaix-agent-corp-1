@@ -129,17 +129,29 @@ class Agent:
     def _build_prompt(self, user_input):
         """Build the prompt sent to the model.
 
-        Memory is included only when ENABLE_MEMORY is true.
+        Memory and compacted context history are included when enabled.
         """
-        if not self._memory_enabled():
-            return user_input
-        history = self.memory.retrieve("history") or []
-        memory_text = "\n".join(
-            f"Q: {h['input']}\nA: {h['response']}" for h in history[-3:]
-        )
-        if memory_text:
-            return f"{memory_text}\nQ: {user_input}"
-        return user_input
+        parts = []
+
+        if self._memory_enabled():
+            history = self.memory.retrieve("history") or []
+            memory_text = "\n".join(
+                f"Q: {h['input']}\nA: {h['response']}" for h in history[-3:]
+            )
+            if memory_text:
+                parts.append(memory_text)
+
+        if self._context_enabled():
+            messages = self.context.get_messages()
+            if messages:
+                context_text = "\n".join(
+                    f"{m.get('role', 'user')}: {m.get('content', '')}"
+                    for m in messages
+                )
+                parts.append(f"Conversation history:\n{context_text}")
+
+        parts.append(f"Q: {user_input}")
+        return "\n\n".join(parts)
 
     def _remember(self, user_input, response):
         """Store the turn in memory when ENABLE_MEMORY is true."""
@@ -152,10 +164,10 @@ class Agent:
 
         Flow:
         1. Update context (optional).
-        2. Build prompt with optional memory.
+        2. Build prompt with optional memory and compacted context.
         3. Call Model.complete() to get raw LLM text.
         4. Call Skill.decide() to route: direct answer or tool call.
-        5. If tool call, execute via Tool.
+        5. If tool call, execute via Tool and record the result in context.
         6. Store to memory (optional).
         """
         if self._context_enabled():
@@ -169,6 +181,12 @@ class Agent:
 
         if decision.get("action") == "tool":
             result = self.tool.execute(decision.get("tool"), decision.get("params"))
+            if self._context_enabled():
+                self.context.update_with_result({
+                    "tool_name": decision.get("tool", "unknown"),
+                    "params": decision.get("params", {}),
+                    "result_preview": str(result),
+                })
         else:
             result = decision.get("response", llm_response)
 

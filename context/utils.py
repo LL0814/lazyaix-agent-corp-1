@@ -1,15 +1,18 @@
 """Utilities for context compaction."""
 
 import json
-import time
+import uuid
+import warnings
 from pathlib import Path
 
-from context.config import TOOL_RESULTS_DIR, TRANSCRIPT_DIR
+from context.config import PERSIST_THRESHOLD, TOOL_RESULTS_DIR, TRANSCRIPT_DIR
 
 
 def estimate_size(messages: list[dict]) -> int:
-    """Rough token estimate: ~4 characters per token."""
-    return len(str(messages)) // 4
+    """Return the total character count of the messages list."""
+    if not messages:
+        return 0
+    return len(str(messages))
 
 
 def _block_type(block) -> str | None:
@@ -41,19 +44,19 @@ def _is_tool_result_message(msg: dict) -> bool:
 
 
 def _assert_no_orphan_tool_results(messages: list[dict]) -> None:
-    """Raise AssertionError if any tool_result lacks a preceding tool_use."""
+    """Raise RuntimeError if any tool_result lacks a preceding tool_use."""
     for idx, msg in enumerate(messages):
         if _is_tool_result_message(msg):
-            assert idx > 0, f"tool_result at index {idx} has no predecessor"
-            assert _message_has_tool_use(messages[idx - 1]), (
-                f"Orphan tool_result at index {idx}: {messages}"
-            )
+            if idx == 0:
+                raise RuntimeError(f"tool_result at index {idx} has no predecessor")
+            if not _message_has_tool_use(messages[idx - 1]):
+                raise RuntimeError(f"Orphan tool_result at index {idx}: {messages}")
 
 
 def write_transcript(messages: list[dict]) -> Path:
     """Persist the full conversation to disk and return the file path."""
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
-    path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
+    path = TRANSCRIPT_DIR / f"transcript_{uuid.uuid4().hex}.jsonl"
     with path.open("w", encoding="utf-8") as f:
         for msg in messages:
             f.write(json.dumps(msg, default=str) + "\n")
@@ -62,7 +65,7 @@ def write_transcript(messages: list[dict]) -> Path:
 
 def persist_large_output(tool_use_id: str, output: str) -> str:
     """Persist a large tool output to disk and return a placeholder marker."""
-    if len(output) <= 30000:
+    if len(output) <= PERSIST_THRESHOLD:
         return output
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     path = TOOL_RESULTS_DIR / f"{tool_use_id}.txt"
