@@ -279,7 +279,7 @@ class Context:
                 self._state.compression.compact_history_failures += 1
                 if (
                     self._state.compression.compact_history_failures
-                    >= 3
+                    >= self._compact_breaker.max_failures
                 ):
                     self._state.compression.compact_history_disabled = True
 
@@ -428,7 +428,7 @@ class Context:
             except Exception as exc:
                 warnings.warn(f"compact_history failed: {exc}")
                 self._state.compression.compact_history_failures += 1
-                if self._state.compression.compact_history_failures >= 3:
+                if self._state.compression.compact_history_failures >= self._compact_breaker.max_failures:
                     self._state.compression.compact_history_disabled = True
         self._sync_messages_to_turns()
         self._state.token_stats = self._compute_token_stats()
