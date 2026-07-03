@@ -9,6 +9,8 @@ The loop is responsible for:
 - Running the synchronous CLI REPL loop.
 """
 
+import asyncio
+
 from agent import Agent
 
 
@@ -55,23 +57,32 @@ def run_loop() -> None:
     memory = Memory()
     # Use a throw-away Agent just to read the display name from config.
     print(f"{Agent(context, memory).name} is ready. Type 'exit' or 'quit' to stop.")
-    while True:
+    try:
+        while True:
+            try:
+                user_input = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+
+            if not user_input:
+                continue
+            if user_input.lower() in {"exit", "quit"}:
+                print("Goodbye.")
+                break
+
+            # Recreate the Agent each turn with the current Context and Memory.
+            agent = Agent(context=context, memory=memory)
+            response = agent.process_turn(user_input)
+            print(response)
+    finally:
+        # Ensure any lingering asyncio tasks from event-driven turns are cleaned up.
         try:
-            user_input = input("> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-
-        if not user_input:
-            continue
-        if user_input.lower() in {"exit", "quit"}:
-            print("Goodbye.")
-            break
-
-        # Recreate the Agent each turn with the current Context and Memory.
-        agent = Agent(context=context, memory=memory)
-        response = agent.process_turn(user_input)
-        print(response)
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.stop()
+        except RuntimeError:
+            pass
 
 
 if __name__ == "__main__":
