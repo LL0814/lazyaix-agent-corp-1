@@ -83,6 +83,28 @@ def test_supervisor_invalid_task_graph_graceful_error(monkeypatch):
     assert response.startswith("[Workflow planning error]")
 
 
+def test_supervisor_event_driven_timeout(monkeypatch):
+    import asyncio as aio
+
+    monkeypatch.setenv("WORKFLOW_TIMEOUT_SECONDS", "0.01")
+
+    async def never_complete(self, event):
+        await aio.Event().wait()
+
+    monkeypatch.setattr("subagents.handlers.WriterHandler.__call__", never_complete)
+
+    plan = (
+        '{"action": "delegate", "tasks": ['
+        '{"task_id": "write_001", "task_type": "write", "target_capability": "writer", '
+        '"instructions": "write poem", "dependencies": [], "input_refs": [], "required_for_completion": true}'
+        ']}'
+    )
+    agent = make_agent(plan, monkeypatch)
+    response = agent.process_turn("write a poem")
+    assert "[Workflow timeout]" in response
+    assert "0.01s" in response
+
+
 def test_supervisor_custom_max_retries_from_config(monkeypatch):
     monkeypatch.setenv("MAX_RETRIES", "5")
     captured = {}

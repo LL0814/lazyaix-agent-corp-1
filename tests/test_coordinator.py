@@ -342,6 +342,46 @@ async def test_coordinator_duplicate_workflow_failed_ignored():
 
 
 @pytest.mark.asyncio
+async def test_coordinator_failure_populates_workflow_error():
+    bus = InMemoryEventBus()
+    failed_events = []
+
+    async def collect_failed(event: Event):
+        failed_events.append(event)
+
+    bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
+    await bus.start()
+
+    coord = WorkflowCoordinator(bus)
+    t1 = Task("t1", "work", "worker", "do work")
+    t2 = Task("t2", "work", "worker", "do more", dependencies=["t1"])
+    wf = make_wf(t1, t2)
+    await coord.start_workflow(wf)
+
+    await coord.handle_task_failed(
+        Event(
+            event_id="e1",
+            event_type=EventType.AGENT_FAILED,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="t1",
+            source="worker",
+            payload={"error": "fatal", "retryable": False},
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert wf.status == WorkflowStatus.FAILED
+    assert wf.error is not None
+    assert wf.error["message"] == "Required tasks failed or were blocked"
+    assert len(wf.error["failed_tasks"]) == 2
+    failed_ids = {t["task_id"] for t in wf.error["failed_tasks"]}
+    assert failed_ids == {"t1", "t2"}
+    assert wf.error["failed_tasks"][0]["error"] == {"error": "fatal", "retryable": False}
+    await bus.stop()
+
+
+@pytest.mark.asyncio
 async def test_coordinator_retry_exhaustion_blocks_downstream():
     bus = InMemoryEventBus()
     failed_events = []

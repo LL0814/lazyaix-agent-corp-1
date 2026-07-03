@@ -252,7 +252,14 @@ class Agent:
                 await coordinator.start_workflow(workflow)
             except TaskGraphError as exc:
                 return f"[Workflow planning error] {exc}"
-            await future
+
+            timeout_seconds = float(
+                self.config.get("WORKFLOW_TIMEOUT_SECONDS", "300")
+            )
+            try:
+                await asyncio.wait_for(future, timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                return f"[Workflow timeout] did not complete within {timeout_seconds}s"
 
             return self._finalize_workflow(workflow, user_input)
         finally:

@@ -146,6 +146,16 @@ class WorkflowCoordinator:
             self._resolve_completion_future(workflow.workflow_id)
         elif graph.has_failed_required():
             workflow.status = WorkflowStatus.FAILED
+            failed_tasks = [
+                {"task_id": t.task_id, "error": t.error}
+                for t in workflow.tasks.values()
+                if t.required_for_completion
+                and t.status in (TaskStatus.FAILED, TaskStatus.BLOCKED)
+            ]
+            workflow.error = {
+                "message": "Required tasks failed or were blocked",
+                "failed_tasks": failed_tasks,
+            }
             await self.event_bus.publish(
                 Event(
                     event_id=str(uuid.uuid4()),
