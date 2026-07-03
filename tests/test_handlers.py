@@ -12,8 +12,15 @@ from subagents.handlers import ResearcherHandler, WriterHandler
 async def test_researcher_handler_publishes_completed():
     bus = InMemoryEventBus()
     received = []
-    bus.subscribe(EventType.AGENT_COMPLETED, lambda e: received.append(e))
-    bus.subscribe(EventType.AGENT_STARTED, lambda e: None)
+
+    async def collect(event: Event):
+        received.append(event)
+
+    async def noop(event: Event):
+        return None
+
+    bus.subscribe(EventType.AGENT_COMPLETED, collect)
+    bus.subscribe(EventType.AGENT_STARTED, noop)
     await bus.start()
 
     handler = ResearcherHandler(Model(), bus)
@@ -42,8 +49,15 @@ async def test_researcher_handler_publishes_completed():
 async def test_writer_handler_publishes_completed():
     bus = InMemoryEventBus()
     received = []
-    bus.subscribe(EventType.AGENT_COMPLETED, lambda e: received.append(e))
-    bus.subscribe(EventType.AGENT_STARTED, lambda e: None)
+
+    async def collect(event: Event):
+        received.append(event)
+
+    async def noop(event: Event):
+        return None
+
+    bus.subscribe(EventType.AGENT_COMPLETED, collect)
+    bus.subscribe(EventType.AGENT_STARTED, noop)
     await bus.start()
 
     handler = WriterHandler(Model(), bus)
