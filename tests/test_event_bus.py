@@ -66,7 +66,11 @@ async def test_handler_exception_not_crash_bus():
 @pytest.mark.asyncio
 async def test_start_stop():
     bus = InMemoryEventBus()
-    bus.subscribe(EventType.TASK_READY, lambda e: None)
+
+    async def noop_handler(event: Event):
+        return None
+
+    bus.subscribe(EventType.TASK_READY, noop_handler)
     await bus.start()
     assert len(bus._tasks) == 1
     await bus.stop()
