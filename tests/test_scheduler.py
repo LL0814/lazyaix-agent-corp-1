@@ -178,3 +178,74 @@ async def test_scheduler_dispatches_ready_tasks_concurrently():
     assert len([c for c in calls if c[0] == "end"]) == handler_count
     assert elapsed < 0.2
     await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_handler_exception_logged(caplog):
+    bus = InMemoryEventBus()
+    calls = []
+
+    async def failing_handler(event: Event):
+        calls.append(event.task_id)
+        raise RuntimeError("handler exploded")
+
+    scheduler = Scheduler(bus, {"researcher": failing_handler})
+    bus.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)
+
+    async def assigned_noop(event: Event) -> None:
+        return None
+
+    bus.subscribe(EventType.TASK_ASSIGNED, assigned_noop)
+    await bus.start()
+
+    with caplog.at_level("ERROR", logger="scheduler"):
+        await bus.publish(
+            Event(
+                event_id="e1",
+                event_type=EventType.TASK_READY,
+                trace_id="tr-1",
+                workflow_id="wf-1",
+                task_id="r1",
+                target_capability="researcher",
+            )
+        )
+        await asyncio.sleep(0.05)
+
+    assert calls == ["r1"]
+    assert "Handler failed for task r1" in caplog.text
+    assert "handler exploded" in caplog.text
+    await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_cleans_up_completed_handler_tasks():
+    bus = InMemoryEventBus()
+    calls = []
+
+    async def ok_handler(event: Event):
+        calls.append(event.task_id)
+
+    scheduler = Scheduler(bus, {"researcher": ok_handler})
+    bus.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)
+
+    async def assigned_noop(event: Event) -> None:
+        return None
+
+    bus.subscribe(EventType.TASK_ASSIGNED, assigned_noop)
+    await bus.start()
+
+    await bus.publish(
+        Event(
+            event_id="e1",
+            event_type=EventType.TASK_READY,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="r1",
+            target_capability="researcher",
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert calls == ["r1"]
+    assert len(scheduler._tasks) == 0
+    await bus.stop()

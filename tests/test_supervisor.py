@@ -142,3 +142,29 @@ def test_supervisor_duplicate_task_id_graceful_error(monkeypatch):
     response = agent.process_turn("duplicate task ids")
     assert response.startswith("[Workflow planning error]")
     assert "Duplicate task_id" in response
+
+
+def test_supervisor_missing_task_id_graceful_error(monkeypatch):
+    plan = (
+        '{"action": "delegate", "tasks": ['
+        '{"task_type": "write", "target_capability": "writer", '
+        '"instructions": "missing task_id", "dependencies": [], "input_refs": [], "required_for_completion": true}'
+        ']}'
+    )
+    agent = make_agent(plan, monkeypatch)
+    response = agent.process_turn("missing task id")
+    assert response.startswith("[Workflow planning error]")
+    assert "task_id" in response
+
+
+def test_supervisor_missing_target_capability_graceful_error(monkeypatch):
+    plan = (
+        '{"action": "delegate", "tasks": ['
+        '{"task_id": "bad_001", "task_type": "write", '
+        '"instructions": "missing capability", "dependencies": [], "input_refs": [], "required_for_completion": true}'
+        ']}'
+    )
+    agent = make_agent(plan, monkeypatch)
+    response = agent.process_turn("missing target capability")
+    assert response.startswith("[Workflow planning error]")
+    assert "target_capability" in response

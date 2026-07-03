@@ -159,16 +159,20 @@ class Agent:
         for item in tasks_data:
             if not isinstance(item, dict):
                 raise TaskGraphError(f"Task entry must be an object, got {type(item).__name__}")
-            task_id = item["task_id"]
+            task_id = item.get("task_id")
+            target_capability = item.get("target_capability")
+            if not task_id or not target_capability:
+                raise TaskGraphError(
+                    f"Each task must have task_id and target_capability: {item}"
+                )
             if task_id in tasks:
                 raise TaskGraphError(f"Duplicate task_id in plan: {task_id}")
-            for field in ("target_capability", "instructions"):
-                if field not in item:
-                    raise TaskGraphError(f"Task missing required field '{field}': {item}")
+            if "instructions" not in item:
+                raise TaskGraphError(f"Task missing required field 'instructions': {item}")
             task = Task(
                 task_id=task_id,
                 task_type=item.get("task_type", "generic"),
-                target_capability=item["target_capability"],
+                target_capability=target_capability,
                 instructions=item["instructions"],
                 input=item.get("input"),
                 dependencies=item.get("dependencies", []),

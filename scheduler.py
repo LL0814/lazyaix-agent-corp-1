@@ -22,6 +22,23 @@ class Scheduler:
         self.event_bus = event_bus
         self.handlers = handlers
         self._dispatched: set[str] = set()
+        self._tasks: set[asyncio.Task] = set()
+
+    def _spawn_handler(self, handler: Handler, event: Event) -> None:
+        task = asyncio.create_task(handler(event))
+        self._tasks.add(task)
+
+        def _on_done(t: asyncio.Task) -> None:
+            self._tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                logger.exception(
+                    "Handler failed for task %s", event.task_id, exc_info=exc
+                )
+
+        task.add_done_callback(_on_done)
 
     async def handle_task_ready(self, event: Event) -> None:
         task_id = event.task_id
@@ -64,4 +81,4 @@ class Scheduler:
                 target_capability=capability,
             )
         )
-        asyncio.create_task(handler(event))
+        self._spawn_handler(handler, event)
