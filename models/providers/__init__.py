@@ -2,12 +2,14 @@
 
 from .base import BaseProvider
 from .glm import GLMProvider
+from .kimi import KimiProvider
 from .openai_compatible import OpenAICompatibleProvider
 from .tongyi import TongyiProvider
 
 __all__ = [
     "BaseProvider",
     "GLMProvider",
+    "KimiProvider",
     "OpenAICompatibleProvider",
     "TongyiProvider",
 ]

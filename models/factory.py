@@ -2,6 +2,7 @@
 
 from .providers.base import BaseProvider
 from .providers.glm import GLMProvider
+from .providers.kimi import KimiProvider
 from .providers.tongyi import TongyiProvider
 
 
@@ -11,6 +12,7 @@ class ProviderFactory:
     _registry: dict[str, type[BaseProvider]] = {
         "tongyi": TongyiProvider,
         "glm": GLMProvider,
+        "kimi": KimiProvider,
     }
 
     @classmethod
