@@ -73,6 +73,11 @@ class WorkflowCoordinator:
         task = workflow.tasks.get(event.task_id)
         if task is None:
             return
+        if task.status in (TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.COMPLETED):
+            return
+        if task.status == TaskStatus.RETRYING:
+            # A retry has already been scheduled for this failure; ignore duplicate event.
+            return
 
         retryable = event.payload.get("retryable", False)
         if retryable and task.retry_count < self.max_retries:

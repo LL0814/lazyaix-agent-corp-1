@@ -1954,8 +1954,12 @@ printf '帮我写一篇关于秋天的散文\nquit\n' | uv run loop.py
 事件驱动模式：
 
 ```bash
-ENABLE_EVENT_DRIVEN=true printf '帮我写一篇关于秋天的散文\nquit\n' | uv run loop.py
+export ENABLE_EVENT_DRIVEN=true
+printf '帮我写一篇关于秋天的散文\nquit\n' | uv run loop.py
+unset ENABLE_EVENT_DRIVEN
 ```
+
+> 注意：`ENABLE_EVENT_DRIVEN` 必须导出到当前 shell 环境，这样 `uv run loop.py` 才能读取到它。写成 `ENABLE_EVENT_DRIVEN=true printf ...` 只会把变量赋给 `printf` 进程，`uv run` 看不到。
 
 预期结果：两种模式都产生 Writer 结果并干净退出。
 

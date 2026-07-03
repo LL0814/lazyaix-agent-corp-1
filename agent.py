@@ -253,8 +253,7 @@ class Agent:
                     tasks=self._build_tasks_from_plan(decision.get("tasks", [])),
                 )
 
-                loop = asyncio.get_event_loop()
-                future = loop.create_future()
+                future = asyncio.get_running_loop().create_future()
                 coordinator.set_completion_future(workflow.workflow_id, future)
                 await coordinator.start_workflow(workflow)
             except TaskGraphError as exc:
