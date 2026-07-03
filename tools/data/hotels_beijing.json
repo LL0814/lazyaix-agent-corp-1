@@ -1,0 +1,34 @@
+[
+  {
+    "name": "北京王府井希尔顿酒店",
+    "address": "北京市东城区王府井大街8号",
+    "price_per_night": 1380,
+    "rating": 4.7,
+    "room_type": "豪华大床房",
+    "facilities": ["健身房", "游泳池", "商务中心", "餐厅", "停车场"]
+  },
+  {
+    "name": "北京诺富特和平宾馆",
+    "address": "北京市东城区王府井金鱼胡同3号",
+    "price_per_night": 680,
+    "rating": 4.4,
+    "room_type": "高级大床房",
+    "facilities": ["健身房", "餐厅", "停车场"]
+  },
+  {
+    "name": "全季酒店（北京天安门广场店）",
+    "address": "北京市东城区前门西大街甲10号",
+    "price_per_night": 480,
+    "rating": 4.3,
+    "room_type": "高级双床房",
+    "facilities": ["餐厅", "停车场", "自助洗衣"]
+  },
+  {
+    "name": "北京胡同里民宿",
+    "address": "北京市西城区什刹海后海北沿15号",
+    "price_per_night": 380,
+    "rating": 4.5,
+    "room_type": "四合院大床房",
+    "facilities": ["茶室", "停车场", "庭院"]
+  }
+]

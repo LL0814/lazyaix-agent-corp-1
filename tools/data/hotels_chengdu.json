@@ -1,0 +1,42 @@
+[
+  {
+    "name": "成都瑞吉酒店",
+    "address": "成都市锦江区人民南路一段122号",
+    "price_per_night": 1580,
+    "rating": 4.8,
+    "room_type": "豪华大床房",
+    "facilities": ["健身房", "游泳池", "商务中心", "餐厅", "停车场"]
+  },
+  {
+    "name": "成都博舍酒店",
+    "address": "成都市锦江区笔帖式街81号",
+    "price_per_night": 980,
+    "rating": 4.6,
+    "room_type": "精品大床房",
+    "facilities": ["健身房", "餐厅", "咖啡厅", "停车场"]
+  },
+  {
+    "name": "全季酒店（成都春熙路店）",
+    "address": "成都市锦江区红星路三段1号",
+    "price_per_night": 420,
+    "rating": 4.3,
+    "room_type": "高级双床房",
+    "facilities": ["餐厅", "停车场", "自助洗衣"]
+  },
+  {
+    "name": "成都宽窄巷子亚朵酒店",
+    "address": "成都市青羊区金河路59号",
+    "price_per_night": 560,
+    "rating": 4.5,
+    "room_type": "高级大床房",
+    "facilities": ["健身房", "餐厅", "会议室", "停车场"]
+  },
+  {
+    "name": "成都大熊猫主题民宿",
+    "address": "成都市成华区熊猫大道1375号",
+    "price_per_night": 320,
+    "rating": 4.4,
+    "room_type": "主题大床房",
+    "facilities": ["餐厅", "停车场", "儿童乐园"]
+  }
+]

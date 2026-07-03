@@ -1,38 +1,109 @@
-"""Real Model implementation using Kimi's OpenAI-compatible API."""
+"""模型入口：加载配置并暴露 LLM complete() 方法。"""
 
 import os
 
-from openai import OpenAI
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
+from .factory import ProviderFactory
+from .providers.base import BaseProvider
 
 
 class Model:
-    """Loads config and exposes an LLM complete() method via Kimi API."""
+    """统一 LLM 包装器。
+
+    从环境变量读取 ``MODEL``（格式 ``provider:model``），并解析对应厂商的
+    API Key / Base URL：
+
+    - ``TONGYI_API_KEY`` / ``TONGYI_BASE_URL``
+    - ``GLM_API_KEY`` / ``GLM_BASE_URL``
+
+    支持运行时通过 ``switch(model_spec)`` 切换模型。
+    """
+
+    DEFAULT_MODEL = "tongyi:qwen-turbo"
 
     def __init__(self):
-        self.api_key = os.environ.get("MODEL_API_KEY", "")
-        self.model_name = os.environ.get("MODEL_NAME", "kimi-for-coding")
-        self.base_url = os.environ.get("MODEL_URL", "https://api.kimi.com/coding/v1")
-        self._client = None
-        self.last_usage = None
+        provider, model_name = self._parse_model_spec(
+            os.environ.get("MODEL", self.DEFAULT_MODEL)
+        )
+        self.provider_name = provider
+        self.model_name = model_name
 
-    @property
-    def client(self) -> OpenAI:
-        if self._client is None:
-            self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-        return self._client
+        self.api_key, self.base_url = self._resolve_env_config(provider)
 
-    def complete(self, prompt: str) -> str:
-        """Call the LLM and return raw text output."""
-        if not self.api_key:
-            raise RuntimeError(
-                "MODEL_API_KEY is not set. Please copy .env.example to .env and fill in your API key."
-            )
-
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1024,
+        self._provider: BaseProvider = ProviderFactory.create(
+            provider=self.provider_name,
+            api_key=self.api_key,
+            model_name=self.model_name,
+            base_url=self.base_url,
         )
 
-        self.last_usage = response.usage
-        return response.choices[0].message.content or ""
+    @staticmethod
+    def _resolve_env_config(provider: str) -> tuple[str, str | None]:
+        """解析 ``provider`` 对应的 API Key 和 Base URL。
+
+        仅使用 ``{PROVIDER}_API_KEY`` / ``{PROVIDER}_BASE_URL`` 环境变量。
+        没有通用回退 Key；运行时切换时必须使用目标厂商自身的凭据。
+
+        类似 ``请在此填写...`` 的占位值将被视为未配置，
+        以便 Agent 能给出明确的“Key 缺失”提示，而不是将无效 Key
+        发送给厂商 API。
+        """
+        prefix = provider.upper()
+        raw_key = os.environ.get(f"{prefix}_API_KEY", "")
+        api_key = "" if "请在此" in raw_key else raw_key
+        base_url = os.environ.get(f"{prefix}_BASE_URL", "") or None
+        return api_key, base_url
+
+    @staticmethod
+    def _parse_model_spec(spec: str) -> tuple[str, str]:
+        """将 ``provider:model`` 格式的字符串解析为 (provider, model_name)。"""
+        spec = spec.strip()
+        if ":" not in spec:
+            raise ValueError(
+                f"MODEL 格式错误，应为 provider:model，当前: {spec!r}"
+            )
+        provider, model_name = spec.split(":", 1)
+        provider = provider.strip().lower()
+        model_name = model_name.strip()
+        if not provider or not model_name:
+            raise ValueError(
+                f"MODEL 格式错误，provider 和 model_name 不能为空: {spec!r}"
+            )
+        return provider, model_name
+
+    def complete(self, prompt: str, system: str | None = None) -> str:
+        """调用当前 Provider 并返回原始文本输出。"""
+        return self._provider.complete(prompt, system=system)
+
+    def switch(self, model_spec: str) -> bool:
+        """运行时切换当前模型。
+
+        Args:
+            model_spec: 新模型，格式为 ``provider:model``。
+
+        Returns:
+            切换成功返回 True，否则返回 False。
+        """
+        try:
+            provider, model_name = self._parse_model_spec(model_spec)
+            api_key, base_url = self._resolve_env_config(provider)
+            self._provider = ProviderFactory.create(
+                provider=provider,
+                api_key=api_key,
+                model_name=model_name,
+                base_url=base_url,
+            )
+            self.provider_name = provider
+            self.model_name = model_name
+            self.api_key = api_key
+            self.base_url = base_url
+            return True
+        except Exception as exc:
+            print(f"[model] 切换失败：{exc}")
+            return False
