@@ -114,7 +114,8 @@ def get_weather(location: str = "", city: str = "", days: int = 7) -> list[Weath
         "timezone": "Asia/Shanghai",
         "forecast_days": forecast_days,
     }
-    resp = http_get(OPENMETEO_FORECAST_URL, params)
+    # 设置 10 秒超时：Open-Meteo 超时则放弃天气数据，返回空列表
+    resp = http_get(OPENMETEO_FORECAST_URL, params, timeout=10)
 
     if not resp or "daily" not in resp:
         logger.warning("Open-Meteo 返回异常: %s", resp)

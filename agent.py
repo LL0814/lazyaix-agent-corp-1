@@ -40,9 +40,9 @@ except ImportError:
         """Model stub: loads config and exposes an LLM complete() method."""
 
         def __init__(self):
-            # Load model-specific configuration from the environment.
-            self.api_key = os.environ.get("MODEL_API_KEY", "stub-key")
-            self.model_name = os.environ.get("MODEL_NAME", "stub-llm")
+            # Stub: real models.Model is used when available.
+            self.api_key = ""
+            self.model_name = os.environ.get("MODEL", "stub-llm")
 
         def complete(self, prompt: str) -> str:
             """Call the LLM and return raw text output.
@@ -86,6 +86,12 @@ except ImportError:
 
 
 try:
+    from skills.common import formatter
+except ImportError:
+    formatter = None
+
+
+try:
     from subagents import Subagent
 except ImportError:
     class Subagent:  # Stub
@@ -106,11 +112,11 @@ class Agent:
     behavior.
     """
 
-    def __init__(self, context, memory):
+    def __init__(self, context, memory, model=None):
         self.context = context
         self.memory = memory
         self.config = Config()
-        self.model = Model()
+        self.model = model if model is not None else Model()
         self.skill = Skill()
         self.tool = Tool()
         self.subagent = Subagent()
@@ -141,11 +147,28 @@ class Agent:
             return f"{memory_text}\nQ: {user_input}"
         return user_input
 
+    def _format_tool_result(self, result) -> str:
+        """Format tool results for human-readable output."""
+        if isinstance(result, dict) and "error" in result:
+            return f"工具返回错误: {result['error']}"
+        if formatter is not None:
+            if hasattr(result, "days") and hasattr(result, "destination"):
+                return formatter.format_itinerary(result)
+        return str(result)
+
     def _remember(self, user_input, response):
         """Store the turn in memory when ENABLE_MEMORY is true."""
         history = self.memory.retrieve("history") or []
         history.append({"input": user_input, "response": response})
         self.memory.store("history", history[-10:])
+
+    def _is_model_error_response(self, response: str) -> bool:
+        """Detect provider-formatted error messages from Model.complete().
+
+        All providers return errors wrapped as ``[{provider}] ...`` so that
+        Agent can distinguish them from real LLM output.
+        """
+        return isinstance(response, str) and response.startswith("[")
 
     def process_turn(self, user_input: str) -> str:
         """Run a single turn.
@@ -154,21 +177,30 @@ class Agent:
         1. Update context (optional).
         2. Build prompt with optional memory.
         3. Call Model.complete() to get raw LLM text.
-        4. Call Skill.decide() to route: direct answer or tool call.
-        5. If tool call, execute via Tool.
-        6. Store to memory (optional).
+        4. If the model reports an error (missing key, timeout, etc.),
+           return the error directly.
+        5. Otherwise, call Skill.decide() to route: direct answer or tool call.
+        6. If tool call, execute via Tool.
+        7. Store to memory (optional).
         """
         if self._context_enabled():
             self.context.update(user_input)
 
         prompt = self._build_prompt(user_input)
         llm_response = self.model.complete(prompt)
+
+        # If the model layer reported an error, surface it immediately
+        # instead of pretending the agent can still work normally.
+        if self._is_model_error_response(llm_response):
+            return llm_response
+
         decision = self.skill.decide(
             user_input, llm_response, self.context.get(), self.memory
         )
 
         if decision.get("action") == "tool":
             result = self.tool.execute(decision.get("tool"), decision.get("params"))
+            result = self._format_tool_result(result)
         else:
             result = decision.get("response", llm_response)
 

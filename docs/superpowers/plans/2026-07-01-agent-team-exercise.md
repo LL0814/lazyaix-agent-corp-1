@@ -71,8 +71,9 @@
   # Agent Team Exercise Environment Configuration
   # Copy this file to .env and fill in your values.
 
-  # Example: API key for modal/model provider
-  # MODAL_API_KEY=your_api_key_here
+  # Example: API keys for model providers
+  # TONGYI_API_KEY=your_tongyi_api_key_here
+  # GLM_API_KEY=your_glm_api_key_here
 
   # Example: Agent name shown in the REPL prompt
   # AGENT_NAME=TeachAgent

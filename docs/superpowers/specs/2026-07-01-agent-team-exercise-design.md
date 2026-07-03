@@ -58,7 +58,7 @@
 1. **导入区**：对每个模块尝试 `from <module> import <Class>`，失败则使用内联 `<Class>Stub`。`Context` 和 `Memory` 不在这里组装，而是由 `loop.py` 注入。
 2. **配置加载**：
    - `Config`：优先从 `config` 模块导入，缺失时使用内联 `ConfigStub`，读取 `.env` 或 `os.environ`。
-   - `Model`：自行加载模型相关配置（如 `MODEL_API_KEY`、`MODEL_NAME`），不关心业务输入输出。
+   - `Model`：自行加载模型相关配置（如 `TONGYI_API_KEY` / `GLM_API_KEY`、`MODEL`），不关心业务输入输出。
 3. **Agent 类**：
    - `__init__(context, memory)`：接收 `loop.py` 传入的 `Context` 和 `Memory` 实例。
    - 初始化时动态创建 `Config`、`Model`、`Tool`、`Skill`、`Subagent` 五个实例。
