@@ -12,9 +12,20 @@ the delegated tasks through the `task` tool, and finally calls the LLM
 again to synthesize a final response for the user.
 """
 
+import asyncio
 import json
 import os
 import re
+import uuid
+
+from events.bus import EventBus
+from events.in_memory import InMemoryEventBus
+from events.schema import Event, EventType
+from scheduler import Scheduler
+from subagents.handlers import ResearcherHandler, WriterHandler
+from workflow.coordinator import WorkflowCoordinator
+from workflow.graph import TaskGraph, TaskGraphError
+from workflow.state import Task, TaskStatus, Workflow, WorkflowStatus
 
 # Optional dotenv support. If python-dotenv is installed, load .env.
 try:
@@ -139,6 +150,42 @@ class Agent:
     def _memory_enabled(self):
         return self.config.get("ENABLE_MEMORY", "true").lower() == "true"
 
+    def _event_driven_enabled(self):
+        return self.config.get("ENABLE_EVENT_DRIVEN", "false").lower() == "true"
+
+    def _build_tasks_from_plan(self, tasks_data: list[dict]) -> dict[str, Task]:
+        """Convert LLM task plan into Task objects."""
+        tasks: dict[str, Task] = {}
+        for item in tasks_data:
+            task = Task(
+                task_id=item["task_id"],
+                task_type=item.get("task_type", "generic"),
+                target_capability=item["target_capability"],
+                instructions=item["instructions"],
+                input=item.get("input"),
+                dependencies=item.get("dependencies", []),
+                input_refs=item.get("input_refs", []),
+                required_for_completion=item.get("required_for_completion", True),
+            )
+            tasks[task.task_id] = task
+        return tasks
+
+    def _build_planning_prompt_v2(self, user_input: str) -> str:
+        return (
+            "You are a supervisor agent. You can delegate tasks to two capabilities:\n"
+            "- researcher: good at research, analysis, and summarization\n"
+            "- writer: good at writing, copywriting, and content generation\n\n"
+            "Based on the user's request, decide whether to answer directly or "
+            "delegate to one or more tasks. Tasks may run in parallel if they have "
+            "no dependencies. A writer task may depend on researcher results.\n\n"
+            "Respond with a JSON object in one of these forms:\n"
+            '{"action": "direct", "response": "your direct answer"}\n'
+            'or\n'
+            '{"action": "delegate", "tasks": [{"task_id": "research_001", "task_type": "research", "target_capability": "researcher", "instructions": "...", "dependencies": [], "input_refs": [], "required_for_completion": true}, ...]}\n\n'
+            f"User request: {user_input}\n"
+            "Decision:"
+        )
+
     def _build_prompt(self, user_input):
         """Build the prompt sent to the model.
 
@@ -159,6 +206,93 @@ class Agent:
         history = self.memory.retrieve("history") or []
         history.append({"input": user_input, "response": response})
         self.memory.store("history", history[-10:])
+
+    async def _process_turn_event_driven(self, user_input: str) -> str:
+        """Run the turn using event-driven task scheduling."""
+        event_bus = InMemoryEventBus()
+        coordinator = WorkflowCoordinator(event_bus)
+        scheduler = Scheduler(
+            event_bus,
+            {
+                "researcher": ResearcherHandler(self.model, event_bus),
+                "writer": WriterHandler(self.model, event_bus),
+            },
+        )
+
+        event_bus.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)
+        event_bus.subscribe(EventType.AGENT_COMPLETED, coordinator.handle_task_completed)
+        event_bus.subscribe(EventType.AGENT_FAILED, coordinator.handle_task_failed)
+        await event_bus.start()
+
+        try:
+            prompt = self._build_planning_prompt_v2(user_input)
+            raw = self.model.complete(prompt)
+            decision = self._parse_plan_v2(raw)
+
+            if decision.get("action") == "direct":
+                return decision.get("response", "")
+
+            workflow = Workflow(
+                workflow_id=str(uuid.uuid4()),
+                trace_id=str(uuid.uuid4()),
+                user_input=user_input,
+                tasks=self._build_tasks_from_plan(decision.get("tasks", [])),
+            )
+
+            loop = asyncio.get_event_loop()
+            future = loop.create_future()
+            coordinator.set_completion_future(workflow.workflow_id, future)
+            await coordinator.start_workflow(workflow)
+            await future
+
+            return self._finalize_workflow(workflow, user_input)
+        finally:
+            await event_bus.stop()
+
+    def _parse_plan_v2(self, raw: str) -> dict:
+        """Parse LLM output; on failure fall back to direct response."""
+        raw = raw.strip()
+        try:
+            decision = json.loads(raw)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not match:
+                return {"action": "direct", "response": raw}
+            try:
+                decision = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return {"action": "direct", "response": raw}
+
+        action = decision.get("action")
+        if action == "direct" and "response" in decision:
+            return decision
+        if action == "delegate":
+            tasks = decision.get("tasks", [])
+            if isinstance(tasks, list):
+                return decision
+        return {"action": "direct", "response": raw}
+
+    def _finalize_workflow(self, workflow: Workflow, user_input: str) -> str:
+        """Produce final response from completed workflow."""
+        if workflow.status == WorkflowStatus.FAILED:
+            return f"[Workflow failed] {workflow.error or 'unknown error'}"
+
+        completed = [
+            t for t in workflow.tasks.values() if t.status == TaskStatus.COMPLETED
+        ]
+        if not completed:
+            return "[No tasks completed]"
+
+        # 如果只有一个必需的已完成任务，直接返回其结果。
+        required_completed = [t for t in completed if t.required_for_completion]
+        if len(required_completed) == 1:
+            return str(required_completed[0].result)
+
+        # 否则进行汇总。
+        results = [
+            {"agent": t.target_capability, "result": t.result} for t in completed
+        ]
+        return self._summarize(user_input, results, self.context.get(), self.memory)
 
     def _parse_plan(self, raw: str):
         """Parse the Supervisor planning JSON from raw LLM output.
@@ -285,18 +419,21 @@ class Agent:
         return self.model.complete(prompt)
 
     def process_turn(self, user_input: str) -> str:
-        """Run a single turn through the Supervisor pipeline.
-
-        Flow:
-        1. Update context (optional).
-        2. Call _plan() to decide direct answer or delegation.
-        3. If delegation, execute each task via the `task` tool and collect results.
-        4. Call _summarize() to produce the final user-facing response.
-        5. Store to memory (optional).
-        """
         if self._context_enabled():
             self.context.update(user_input)
 
+        if self._event_driven_enabled():
+            result = asyncio.run(self._process_turn_event_driven(user_input))
+        else:
+            result = self._process_turn_sync(user_input)
+
+        if self._memory_enabled():
+            self._remember(user_input, result)
+
+        return str(result)
+
+    def _process_turn_sync(self, user_input: str) -> str:
+        """Original synchronous implementation (preserved)."""
         plan = self._plan(user_input, self.context.get(), self.memory)
 
         if plan.get("action") == "delegate":
@@ -315,8 +452,5 @@ class Agent:
             result = prefix + summary
         else:
             result = plan.get("response", "")
-
-        if self._memory_enabled():
-            self._remember(user_input, result)
 
         return str(result)
