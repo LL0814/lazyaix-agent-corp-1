@@ -236,3 +236,80 @@ async def test_coordinator_future_resolved_on_completion():
 
     assert future.done()
     await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_duplicate_workflow_failed_ignored():
+    bus = InMemoryEventBus()
+    failed_events = []
+    bus.subscribe(EventType.WORKFLOW_FAILED, lambda e: failed_events.append(e))
+    await bus.start()
+
+    coord = WorkflowCoordinator(bus)
+    wf = make_wf(Task("t1", "work", "worker", "do work"))
+    await coord.start_workflow(wf)
+
+    event = Event(
+        event_id="e1",
+        event_type=EventType.AGENT_FAILED,
+        trace_id="tr-1",
+        workflow_id="wf-1",
+        task_id="t1",
+        source="worker",
+        payload={"error": "fatal", "retryable": False},
+    )
+    await coord.handle_task_failed(event)
+    await coord.handle_task_failed(event)
+    await asyncio.sleep(0.05)
+
+    assert wf.tasks["t1"].status == TaskStatus.FAILED
+    assert wf.status == WorkflowStatus.FAILED
+    assert len(failed_events) == 1
+    await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_retry_exhaustion_blocks_downstream():
+    bus = InMemoryEventBus()
+    failed_events = []
+    bus.subscribe(EventType.WORKFLOW_FAILED, lambda e: failed_events.append(e))
+    await bus.start()
+
+    coord = WorkflowCoordinator(bus, max_retries=1)
+    r1 = Task("r1", "research", "researcher", "do research")
+    w1 = Task("w1", "write", "writer", "write", dependencies=["r1"])
+    wf = make_wf(r1, w1)
+    await coord.start_workflow(wf)
+    await asyncio.sleep(0.05)
+
+    await coord.handle_task_failed(
+        Event(
+            event_id="e1",
+            event_type=EventType.AGENT_FAILED,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="r1",
+            source="researcher",
+            payload={"error": "oops", "retryable": True},
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    await coord.handle_task_failed(
+        Event(
+            event_id="e2",
+            event_type=EventType.AGENT_FAILED,
+            trace_id="tr-1",
+            workflow_id="wf-1",
+            task_id="r1",
+            source="researcher",
+            payload={"error": "oops again", "retryable": True},
+        )
+    )
+    await asyncio.sleep(0.05)
+
+    assert wf.tasks["r1"].status == TaskStatus.FAILED
+    assert wf.tasks["w1"].status == TaskStatus.BLOCKED
+    assert wf.status == WorkflowStatus.FAILED
+    assert len(failed_events) == 1
+    await bus.stop()
