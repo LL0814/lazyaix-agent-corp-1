@@ -63,6 +63,10 @@ class Tool:
             logger.warning("未知 action: %s", action)
             return {"error": f"未知 action: {action}"}
 
+        # LLM 传参时数字常被序列化为字符串（如 "3" 而非 3），
+        # 这里做轻量类型修复：纯数字字符串转 int。
+        params = self._coerce_params(params)
+
         try:
             return handler(**params)
         except TypeError as e:
@@ -71,6 +75,17 @@ class Tool:
         except Exception as e:  # noqa: BLE001
             logger.exception("action=%s 执行异常: %s", action, e)
             return {"error": str(e)}
+
+    @staticmethod
+    def _coerce_params(params: dict) -> dict:
+        """将纯数字字符串参数转为 int，兼容 LLM 输出。"""
+        coerced = {}
+        for k, v in params.items():
+            if isinstance(v, str) and v.isdigit():
+                coerced[k] = int(v)
+            else:
+                coerced[k] = v
+        return coerced
 
     # ============ 真实 API 类 ============
 
