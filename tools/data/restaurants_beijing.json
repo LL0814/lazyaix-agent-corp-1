@@ -1,0 +1,47 @@
+[
+  {
+    "name": "全聚德烤鸭店（前门店）",
+    "address": "北京市东城区前门大街30号",
+    "cuisine": "京菜",
+    "avg_price": 180,
+    "rating": 4.5,
+    "signature_dishes": ["北京烤鸭", "芥末鸭掌", "火燎鸭心"],
+    "open_time": "11:00-21:00"
+  },
+  {
+    "name": "东来顺饭庄（王府井店）",
+    "address": "北京市东城区王府井大街198号",
+    "cuisine": "涮羊肉",
+    "avg_price": 150,
+    "rating": 4.4,
+    "signature_dishes": ["手切鲜羊肉", "麻酱小料", "糖蒜"],
+    "open_time": "10:30-22:00"
+  },
+  {
+    "name": "护国寺小吃（总店）",
+    "address": "北京市西城区护国寺大街93号",
+    "cuisine": "小吃",
+    "avg_price": 35,
+    "rating": 4.1,
+    "signature_dishes": ["豆汁焦圈", "驴打滚", "艾窝窝"],
+    "open_time": "06:00-20:00"
+  },
+  {
+    "name": "四季民福烤鸭店（故宫店）",
+    "address": "北京市东城区南池子大街11号",
+    "cuisine": "京菜",
+    "avg_price": 160,
+    "rating": 4.7,
+    "signature_dishes": ["酥不腻烤鸭", "宫廷豌豆黄", "炸酱面"],
+    "open_time": "10:30-22:00"
+  },
+  {
+    "name": "南门涮肉（什刹海店）",
+    "address": "北京市西城区前海东沿17号",
+    "cuisine": "涮羊肉",
+    "avg_price": 130,
+    "rating": 4.5,
+    "signature_dishes": ["鲜切羊肉", "毛肚", "糖蒜"],
+    "open_time": "11:00-23:00"
+  }
+]

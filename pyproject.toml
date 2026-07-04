@@ -3,10 +3,18 @@ name = "agent-team-exercise"
 version = "0.1.0"
 description = "A team exercise scaffold for building a modular agent."
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "openai>=2.44.0",
+    "pydantic>=2.0",
+]
 
 [project.optional-dependencies]
 dotenv = ["python-dotenv>=1.0.0"]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
