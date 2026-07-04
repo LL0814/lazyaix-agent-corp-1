@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "openai>=2.44.0",
     "pydantic>=2.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -13,7 +14,8 @@ dotenv = ["python-dotenv>=1.0.0"]
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
 ]
 
 [tool.pytest.ini_options]

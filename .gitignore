@@ -6,3 +6,4 @@ __pycache__/
 AGENTCONTEXT_EXECUTION_PLAN_PYTHON.md
 .transcripts/
 .task_outputs/
+.worktrees/

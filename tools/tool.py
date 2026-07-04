@@ -29,13 +29,33 @@ from .models import POI, Weather, Route, Hotel, Restaurant, Itinerary
 
 logger = logging.getLogger(__name__)
 
+# Subagent 模块可选加载：未实现时用 stub，保证 Tool.task 仍可调用。
+try:
+    from subagents import Subagent
+except ImportError:  # pragma: no cover - stub fallback
+    class Subagent:  # type: ignore[no-redef]
+        """Stub Subagent used when the real module is not available."""
+
+        def __init__(self, model=None):
+            self.model = model
+
+        def dispatch(self, agent_name: str, task_description: str) -> str:
+            return f"[STUB] Subagent handled task: {task_description}"
+
 
 class Tool:
     """Tool 统一入口类。
 
     被 Agent.process_turn 调用：
         result = self.tool.execute(decision["tool"], decision["params"])
+
+    构造函数可选接收 model 实例，用于驱动 Subagent 分发（task action）。
     """
+
+    def __init__(self, model=None) -> None:
+        # 仅 task action 需要 model；旅行工具不依赖 model。
+        self.model = model
+        self.subagent = Subagent(model)
 
     def execute(self, action: str, params: dict) -> Any:
         """统一入口，按 action 分发到具体实现。
@@ -48,6 +68,11 @@ class Tool:
             各 action 对应的返回值（POI 列表 / Weather 列表 / Itinerary 等）。
             调用失败时返回空列表或 None，不抛异常。
         """
+        # task action 单独处理：params 形如 {"agent": "...", "description": "..."}
+        # 不走 _coerce_params / **params 解包，直接传给 Subagent.dispatch。
+        if action == "task":
+            return self._dispatch_task(params)
+
         dispatch = {
             "search_poi": self._search_poi,
             "get_weather": self._get_weather,
@@ -75,6 +100,20 @@ class Tool:
         except Exception as e:  # noqa: BLE001
             logger.exception("action=%s 执行异常: %s", action, e)
             return {"error": str(e)}
+
+    def _dispatch_task(self, params: dict) -> str:
+        """分发任务到 Subagent worker。
+
+        Args:
+            params: {"agent": "researcher|writer", "description": "..."}
+        """
+        agent_name = params.get("agent") or params.get("agent_name") or ""
+        description = params.get("description") or params.get("task_description") or ""
+        try:
+            return self.subagent.dispatch(agent_name, description)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("task 分发异常: %s", e)
+            return f"[Tool task error] {e}"
 
     @staticmethod
     def _coerce_params(params: dict) -> dict:
