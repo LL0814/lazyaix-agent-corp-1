@@ -3,7 +3,10 @@ name = "agent-team-exercise"
 version = "0.1.0"
 description = "A team exercise scaffold for building a modular agent."
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "openai>=2.44.0",
+    "python-dotenv>=1.0.0",
+]
 
 [project.optional-dependencies]
 dotenv = ["python-dotenv>=1.0.0"]
