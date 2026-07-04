@@ -111,7 +111,13 @@ class Agent:
         self.memory = memory
         self.config = Config()
         self.model = Model()
-        self.skill = Skill()
+        # 通用 Skill 路由：注入 model 启用 LLM 意图识别，
+        # LLM 不可用时自动回退到关键词规则匹配。
+        try:
+            self.skill = Skill(model=self.model)
+        except TypeError:
+            # 兼容旧版 Skill 签名（无 model 参数）
+            self.skill = Skill()
         self.tool = Tool()
         self.subagent = Subagent()
 

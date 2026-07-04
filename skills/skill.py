@@ -1,91 +1,157 @@
-"""Skill 路由主类：单步决策路由。
+"""通用 Skill 路由主类：LLM 意图识别 + 规则兜底。
 
-对外只暴露 Skill 类，实现 decide() 方法。
-符合项目 agent.py 的接口约定：
+对外仍暴露 Skill 类，保持 agent.py 调用接口不变：
     Skill.decide(user_input, llm_response, context, memory) -> dict
 
-本文件是路由器，3 种决策模式的实际逻辑分别在各自的 skill 文件夹中：
-  - skills/requirement-alignment/scripts/handle.py
-  - skills/itinerary-planning/scripts/handle.py
-  - skills/itinerary-validation/scripts/handle.py
+工作流程：
+  1. 用 Model.complete_with_tools 把用户输入 + 已注册插件信息给 LLM
+  2. LLM 输出 JSON 决策（direct 直接回答 / tool 调用工具 / skill 调用子插件）
+  3. 若 LLM 决策为某个 skill，委托给该插件的 handle()
+  4. 若 LLM 不可用或输出非法，fallback 到规则关键词匹配
+
+旅游行程规划作为默认插件内置注册，未来加新 skill 只需在 register_default_skills() 里注册。
 """
 
-from skills.common import utils, slot_extractor
-from skills.common.models import UserRequirement
-from skills.requirement_alignment.scripts import handle as alignment_handle
-from skills.itinerary_planning.scripts import handle as planning_handle
-from skills.itinerary_validation.scripts import handle as validation_handle
-from skills.common import formatter
+import json
+import logging
+
+from .base import SkillPlugin, ToolExecutor
+from .registry import default_registry, SkillRegistry
+from .travel_plugin import TravelSkill
+
+logger = logging.getLogger(__name__)
+
+
+def register_default_skills(registry: SkillRegistry) -> None:
+    """注册内置默认 skill 插件。"""
+    registry.register(TravelSkill())
+
+
+# 模块加载时自动注册默认插件
+register_default_skills(default_registry)
 
 
 class Skill:
-    """Skill 决策层主类。
+    """通用 Skill 路由主类。
 
     被 Agent.process_turn 调用：
         decision = self.skill.decide(user_input, llm_response, context, memory)
-    返回决策字典，由 agent.py 执行。
+
+    支持两种路由模式：
+      1. LLM 意图识别（需注入 model）：把插件信息给 LLM，由 LLM 决策
+      2. 规则兜底（LLM 不可用时）：用插件 keywords 关键词匹配
     """
+
+    def __init__(self, model=None, registry: SkillRegistry | None = None):
+        """初始化通用 Skill 路由器。
+
+        Args:
+            model: Model 实例（可选）。传入则启用 LLM 意图识别；
+                   不传则纯靠规则关键词匹配（测试/离线可用）。
+            registry: Skill 注册表。默认用全局 default_registry。
+        """
+        self.model = model
+        self.registry = registry or default_registry
 
     def decide(self, user_input: str, llm_response: str,
                context: dict, memory) -> dict:
-        """单步决策入口（路由器）。
+        """单步决策入口。
 
-        Args:
-            user_input: 用户本轮输入
-            llm_response: Model.complete() 的原始响应（练手阶段未使用）
-            context: 当前上下文 dict
-            memory: Memory 实例，有 store/retrieve 方法
-
-        Returns:
-            {"action": "direct", "response": str}
-            或
-            {"action": "tool", "tool": "generate_itinerary", "params": {...}}
+        优先用 LLM 意图识别；LLM 不可用或输出非法时 fallback 到规则匹配。
         """
-        # 1. 从 memory 恢复已有行程（跨轮持久化）
-        utils.restore_itinerary_from_memory(memory)
+        # 1. 尝试 LLM 意图识别
+        if self.model is not None:
+            decision = self._decide_via_llm(user_input, llm_response, context, memory)
+            if decision is not None:
+                return decision
+            logger.info("LLM 决策失败，回退到规则匹配")
 
-        # 2. 检测重置意图
-        if utils.detect_intent(user_input, utils.RESET_KEYWORDS):
-            memory.store("current_requirement", None)
-            memory.store("current_itinerary", None)
-            memory.store("reset_flag", True)  # 阻止 restore 从 history 恢复旧行程
-            return {"action": "direct", "response": "好的，已清空之前的规划。请告诉我您想去哪里？"}
+        # 2. 规则兜底
+        return self._decide_via_rules(user_input, llm_response, context, memory)
 
-        # 3. 提取并合并槽位
-        current_req = utils.get_merged_requirement(user_input, memory)
+    def _decide_via_llm(
+        self, user_input: str, llm_response: str, context: dict, memory
+    ) -> dict | None:
+        """用 LLM 做意图识别与工具选择。
 
-        # 4. 检测校验意图（已有行程时）
-        has_itinerary = memory.retrieve("current_itinerary") is not None
-        if has_itinerary and utils.detect_intent(user_input, utils.VALIDATION_KEYWORDS):
-            return validation_handle.handle(memory)
+        返回决策 dict；解析失败返回 None（由调用方 fallback）。
+        """
+        try:
+            tool_specs = self.registry.all_tool_specs()
+            if not tool_specs:
+                # 没有注册任何插件/工具 → 直接用 LLM 原始回复
+                return {"action": "direct", "response": llm_response}
 
-        # 5. 检测重新生成意图（已有行程时）
-        if has_itinerary and utils.detect_intent(user_input, utils.REGENERATE_KEYWORDS):
-            if current_req.is_complete():
-                memory.store("current_itinerary", None)  # 清除旧行程
-                return planning_handle.handle(current_req)
-            # 信息不全，走追问
-            return alignment_handle.handle(current_req)
+            raw = self.model.complete_with_tools(
+                prompt=user_input,
+                tools=tool_specs,
+                system="你是一个通用智能助手。根据用户输入决定直接回答还是调用工具。",
+            )
+            return self._parse_llm_decision(raw, user_input, llm_response, context, memory)
+        except Exception as exc:
+            logger.warning("LLM 意图识别异常: %s", exc)
+            return None
 
-        # 6. 已有行程时的处理
-        if has_itinerary:
-            # 6.1 用户本轮提供了新的目的地/天数/预算 → 视为重新规划
-            #     （避免"问了北京再问成都"还返回北京旧行程）
-            new_req = slot_extractor.extract(user_input)
-            if new_req.destination or new_req.days or new_req.budget:
-                if current_req.is_complete():
-                    memory.store("current_itinerary", None)  # 清除旧行程
-                    return planning_handle.handle(current_req)
-                # 新信息不全，走追问
-                return alignment_handle.handle(current_req)
+    def _parse_llm_decision(
+        self, raw: str, user_input: str, llm_response: str,
+        context: dict, memory,
+    ) -> dict | None:
+        """解析 LLM 输出的 JSON 决策。
 
-            # 6.2 无新需求 → 展示已有行程
-            itinerary = memory.retrieve("current_itinerary")
-            return {"action": "direct", "response": formatter.format_itinerary(itinerary)}
+        支持三种决策：
+          {"action": "direct", "response": "..."}
+          {"action": "tool", "tool": "...", "params": {...}}
+          {"action": "skill", "skill": "插件名", ...}  → 委托给插件 handle()
+        """
+        if not raw:
+            return None
 
-        # 7. 无行程 → 判断槽位是否齐全
-        if not current_req.is_complete():
-            return alignment_handle.handle(current_req)
+        # 尝试提取 JSON（LLM 可能包裹在 markdown 代码块或附加文字中）
+        text = raw.strip()
+        if text.startswith("```"):
+            # 去掉 markdown 代码块
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1]) if lines[-1].startswith("```") else "\n".join(lines[1:])
 
-        # 8. 槽位齐全 → 触发行程生成
-        return planning_handle.handle(current_req)
+        # 尝试找到第一个 { 和最后一个 } 之间的内容
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1:
+            # 不是 JSON，当作直接回复
+            return {"action": "direct", "response": raw}
+        json_str = text[start:end + 1]
+
+        try:
+            decision = json.loads(json_str)
+        except json.JSONDecodeError:
+            return {"action": "direct", "response": raw}
+
+        action = decision.get("action")
+        if action == "direct":
+            response = decision.get("response") or llm_response
+            return {"action": "direct", "response": response}
+        if action == "tool":
+            return {
+                "action": "tool",
+                "tool": decision.get("tool", ""),
+                "params": decision.get("params", {}),
+            }
+        if action == "skill":
+            plugin_name = decision.get("skill", "")
+            plugin = self.registry.get(plugin_name)
+            if plugin is None:
+                return None
+            return plugin.handle(user_input, llm_response, context, memory)
+
+        # 未知 action，当作直接回复
+        return {"action": "direct", "response": llm_response}
+
+    def _decide_via_rules(
+        self, user_input: str, llm_response: str, context: dict, memory
+    ) -> dict:
+        """规则兜底：用关键词匹配插件。"""
+        plugin = self.registry.match(user_input)
+        if plugin is not None:
+            return plugin.handle(user_input, llm_response, context, memory)
+        # 无插件命中 → 直接返回 LLM 原始回复
+        return {"action": "direct", "response": llm_response}
