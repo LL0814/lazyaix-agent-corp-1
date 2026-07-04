@@ -3,6 +3,7 @@
 from .providers.base import BaseProvider
 from .providers.glm import GLMProvider
 from .providers.kimi import KimiProvider
+from .providers.longcat import LongCatProvider
 from .providers.tongyi import TongyiProvider
 
 
@@ -13,6 +14,7 @@ class ProviderFactory:
         "tongyi": TongyiProvider,
         "glm": GLMProvider,
         "kimi": KimiProvider,
+        "longcat": LongCatProvider,
     }
 
     @classmethod
