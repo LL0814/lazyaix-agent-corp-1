@@ -17,6 +17,7 @@ import json
 import os
 import re
 import uuid
+from collections.abc import Iterator
 
 from events.bus import EventBus
 from events.in_memory import InMemoryEventBus
@@ -70,6 +71,10 @@ except ImportError:
             """
             return f"[{self.model_name}] {prompt}"
 
+        def stream_complete(self, prompt: str):
+            """Stream the LLM response."""
+            yield self.complete(prompt)
+
 
 try:
     from tools import Tool
@@ -120,6 +125,12 @@ except ImportError:
             return f"[STUB] Subagent handled task: {task_description}"
 
 
+try:
+    from girlfriend import GirlfriendEngine
+except ImportError:
+    GirlfriendEngine = None
+
+
 class Agent:
     """Dynamically assembled agent with Supervisor planning capabilities.
 
@@ -145,6 +156,12 @@ class Agent:
         # Tool 接收 model 以驱动 Subagent 分发（task action）。
         self.tool = Tool(self.model)
         self.subagent = Subagent(self.model)
+        # Girlfriend 人格层（可选）：ENABLE_GIRLFRIEND_MODE=true 时启用。
+        self.girlfriend = (
+            GirlfriendEngine()
+            if GirlfriendEngine is not None and self._girlfriend_enabled()
+            else None
+        )
 
     @property
     def name(self):
@@ -159,6 +176,15 @@ class Agent:
 
     def _event_driven_enabled(self):
         return self.config.get("ENABLE_EVENT_DRIVEN", "false").lower() == "true"
+
+    def _streaming_enabled(self):
+        return self.config.get("ENABLE_STREAMING", "true").lower() == "true"
+
+    def _vector_memory_enabled(self):
+        return self.config.get("ENABLE_VECTOR_MEMORY", "true").lower() == "true"
+
+    def _girlfriend_enabled(self):
+        return self.config.get("ENABLE_GIRLFRIEND_MODE", "true").lower() == "true"
 
     def _build_tasks_from_plan(self, tasks_data: list[dict]) -> dict[str, Task]:
         """Convert LLM task plan into Task objects."""
@@ -216,13 +242,30 @@ class Agent:
             "Decision:"
         )
 
-    def _build_prompt(self, user_input):
+    def _build_prompt(self, user_input, vector_memories=None):
         """Build the prompt sent to the model.
 
-        Memory and compacted context history are included when enabled.
+        融合 supervisor 规划 + memory 上下文 + 长期记忆 + 向量检索 + girlfriend 人格。
         """
         parts = []
 
+        # 长期结构化偏好记忆（memory.json 中的非 history 键）
+        if self._memory_enabled():
+            all_keys = getattr(self.memory, "list", lambda: [])()
+            for key in all_keys:
+                if key == "history":
+                    continue
+                value = self.memory.retrieve(key)
+                if value is not None:
+                    parts.append(f"- {key}: {value}")
+
+        # 向量记忆检索结果
+        vector_items = self._format_vector_memories(vector_memories or [])
+        if vector_items:
+            parts.append("相关历史对话检索结果：")
+            parts.extend(vector_items)
+
+        # 短期对话历史（memory.history）
         if self._memory_enabled():
             history = self.memory.retrieve("history") or []
             memory_text = "\n".join(
@@ -231,6 +274,7 @@ class Agent:
             if memory_text:
                 parts.append(memory_text)
 
+        # 上下文压缩历史
         if self._context_enabled():
             messages = self.context.get_messages()
             if messages:
@@ -241,13 +285,88 @@ class Agent:
                 parts.append(f"Conversation history:\n{context_text}")
 
         parts.append(f"Q: {user_input}")
-        return "\n\n".join(parts)
+        base_prompt = "\n\n".join(parts)
+        return self._apply_girlfriend_prompt(user_input, base_prompt)
+
+    def _apply_girlfriend_prompt(self, user_input, base_prompt):
+        """若启用 girlfriend 人格层，则对 prompt 做二次包装。"""
+        if self.girlfriend is None:
+            return base_prompt
+        return self.girlfriend.build_prompt(user_input, base_prompt)
+
+    def _format_vector_memories(self, vector_memories):
+        """格式化向量检索返回的记忆片段。"""
+        max_chars = int(self.config.get("VECTOR_MEMORY_MAX_CHARS", "800"))
+        items = []
+        for index, memory in enumerate(vector_memories, start=1):
+            text = str(memory.get("text") or "").strip()
+            if not text:
+                continue
+            if len(text) > max_chars:
+                text = f"{text[:max_chars]}..."
+            score = memory.get("score")
+            prefix = f"{index}. "
+            if isinstance(score, (float, int)):
+                prefix += f"(score={float(score):.3f}) "
+            items.append(f"{prefix}{text}")
+        return items
 
     def _remember(self, user_input, response):
-        """Store the turn in memory when ENABLE_MEMORY is true."""
-        history = self.memory.retrieve("history") or []
-        history.append({"input": user_input, "response": response})
-        self.memory.store("history", history[-10:])
+        """只把用户偏好等结构化信息写入 memory.json。
+
+        例如：用户说"我喜欢吃苹果"，会解析并存储为
+        {"like": "吃苹果，吃栗子，吃香蕉"}。
+        """
+        if not self._memory_enabled():
+            return
+        remember = getattr(self.memory, "remember", None)
+        if callable(remember):
+            remember(user_input)
+        remember_conversation = getattr(self.memory, "remember_conversation", None)
+        if callable(remember_conversation):
+            remember_conversation(user_input, str(response))
+
+    def _after_turn(self, user_input, response):
+        self._remember(user_input, response)
+        if self.girlfriend is not None:
+            self.girlfriend.update_after_turn(user_input, str(response))
+
+    def girlfriend_follow_ups(self, user_input, response):
+        if self.girlfriend is None:
+            return []
+        return self.girlfriend.follow_up_messages(user_input, str(response))
+
+    def is_emotional_turn(self, user_input):
+        if self.girlfriend is None:
+            return False
+        return self.girlfriend.context_kind(user_input) == "emotional"
+
+    def _search_conversation_memories(self, user_input):
+        """Search vector memory with the raw user input before prompt building."""
+        if not self._memory_enabled() or not self._vector_memory_enabled():
+            return []
+        search = getattr(self.memory, "search_conversations", None)
+        if not callable(search):
+            return []
+        try:
+            return search(user_input)
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _precheck_tool_decision(self, user_input):
+        """Try tool routing before streaming model text."""
+        try:
+            decision = self.skill.decide(
+                user_input,
+                "",
+                self.context.get(),
+                self.memory,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if decision.get("action") == "tool":
+            return decision
+        return None
 
     async def _process_turn_event_driven(self, user_input: str) -> str:
         """Run the turn using event-driven task scheduling."""
@@ -487,8 +606,7 @@ class Agent:
         else:
             result = self._process_turn_sync(user_input)
 
-        if self._memory_enabled():
-            self._remember(user_input, result)
+        self._after_turn(user_input, result)
 
         return str(result)
 
@@ -514,3 +632,42 @@ class Agent:
             result = plan.get("response", "")
 
         return str(result)
+
+    def process_turn_stream(self, user_input: str) -> Iterator[str]:
+        """Run a single turn and stream direct model output.
+
+        流式仅对 direct 模式生效；delegate 走同步 _process_turn_sync。
+        """
+        if not self._streaming_enabled():
+            yield self.process_turn(user_input)
+            return
+
+        if self._context_enabled():
+            self.context.update(user_input)
+
+        vector_memories = self._search_conversation_memories(user_input)
+        tool_decision = self._precheck_tool_decision(user_input)
+        if tool_decision is not None:
+            result = self.tool.execute(
+                tool_decision.get("tool"),
+                tool_decision.get("params"),
+            )
+            self._after_turn(user_input, result)
+            yield str(result)
+            return
+
+        prompt = self._build_prompt(user_input, vector_memories)
+        stream_complete = getattr(self.model, "stream_complete", None)
+        chunks = []
+        if callable(stream_complete):
+            for chunk in stream_complete(prompt):
+                text = str(chunk)
+                chunks.append(text)
+                yield text
+        else:
+            text = self.model.complete(prompt)
+            chunks.append(text)
+            yield text
+
+        response = "".join(chunks)
+        self._after_turn(user_input, response)

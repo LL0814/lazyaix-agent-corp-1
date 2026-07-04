@@ -10,8 +10,19 @@ The loop is responsible for:
 """
 
 import asyncio
+import os
+import queue
+import sys
+import threading
 
 from agent import Agent
+
+try:
+    from girlfriend import GirlfriendEngine, HumanizedRenderer, ProactiveScheduler
+except ImportError:
+    GirlfriendEngine = None
+    HumanizedRenderer = None
+    ProactiveScheduler = None
 
 
 try:
@@ -55,6 +66,43 @@ def run_loop() -> None:
     """Run the synchronous CLI REPL loop."""
     context = Context()
     memory = Memory()
+    renderer = HumanizedRenderer() if HumanizedRenderer is not None else None
+    proactive_scheduler = None
+    proactive_printer_stop = threading.Event()
+
+    output_queue: queue.Queue[str] = queue.Queue()
+
+    def girlfriend_enabled() -> bool:
+        return os.environ.get("ENABLE_GIRLFRIEND_MODE", "true").lower() == "true"
+
+    def print_text(text: str, emotional: bool = True) -> None:
+        if renderer is None:
+            print(text, end="", flush=True)
+            return
+        renderer.write(text, emotional=emotional)
+
+    def proactive_printer() -> None:
+        while not proactive_printer_stop.is_set():
+            try:
+                message = output_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            sys.stdout.write("\n[她] ")
+            sys.stdout.flush()
+            print_text(message, emotional=True)
+            sys.stdout.write("\n> ")
+            sys.stdout.flush()
+            output_queue.task_done()
+
+    if girlfriend_enabled() and GirlfriendEngine is not None and ProactiveScheduler is not None:
+        proactive_scheduler = ProactiveScheduler(GirlfriendEngine(), output_queue)
+        proactive_scheduler.start()
+        threading.Thread(
+            target=proactive_printer,
+            name="girlfriend-proactive-printer",
+            daemon=True,
+        ).start()
+
     # Use a throw-away Agent just to read the display name from config.
     print(f"{Agent(context, memory).name} is ready. Type 'exit' or 'quit' to stop.")
     try:
@@ -73,9 +121,42 @@ def run_loop() -> None:
 
             # Recreate the Agent each turn with the current Context and Memory.
             agent = Agent(context=context, memory=memory)
-            response = agent.process_turn(user_input)
-            print(response)
+            emotional = (
+                agent.is_emotional_turn(user_input)
+                if hasattr(agent, "is_emotional_turn")
+                else False
+            )
+            if hasattr(agent, "process_turn_stream"):
+                chunks = []
+                for chunk in agent.process_turn_stream(user_input):
+                    chunks.append(str(chunk))
+                    print_text(chunk, emotional=emotional)
+                print()
+                response_text = "".join(chunks)
+            else:
+                response = agent.process_turn(user_input)
+                response_text = str(response)
+                print_text(response_text, emotional=emotional)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            follow_ups = (
+                agent.girlfriend_follow_ups(user_input, response_text)
+                if hasattr(agent, "girlfriend_follow_ups")
+                else []
+            )
+            for message in follow_ups:
+                sys.stdout.write("[她] ")
+                sys.stdout.flush()
+                print_text(message, emotional=True)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
     finally:
+        proactive_printer_stop.set()
+        if proactive_scheduler is not None:
+            proactive_scheduler.stop()
+        shutdown = getattr(memory, "shutdown", None)
+        if callable(shutdown):
+            shutdown(wait=False)
         # Ensure any lingering asyncio tasks from event-driven turns are cleaned up.
         try:
             loop = asyncio.get_event_loop()
