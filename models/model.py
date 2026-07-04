@@ -81,6 +81,15 @@ class Model:
         """调用当前 Provider 并返回原始文本输出。"""
         return self._provider.complete(prompt, system=system)
 
+    def complete_with_tools(
+        self,
+        prompt: str,
+        tools: list[dict] | None = None,
+        system: str | None = None,
+    ) -> str:
+        """调用当前 Provider 并附带可用工具列表，供 LLM 决策参考。"""
+        return self._provider.complete_with_tools(prompt, tools=tools, system=system)
+
     def switch(self, model_spec: str) -> bool:
         """运行时切换当前模型。
 
