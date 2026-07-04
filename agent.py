@@ -534,7 +534,63 @@ class Agent:
 
         Returns a decision dict. On parse failure, falls back to the Skill
         module for rule-based routing.
+
+        会话历史（context）和长期记忆（memory）会拼入 prompt，
+        让 supervisor 在规划时能参考跨轮上下文。
         """
+        # 收集对话历史与记忆，供 supervisor 参考。
+        # 优先用 Context.recent_turns（纯文本摘要），避免消息 list 的复杂结构。
+        context_section = ""
+        if context is not None:
+            recent_turns = []
+            if isinstance(context, dict):
+                recent_turns = context.get("recent_turns") or []
+            else:
+                state = getattr(context, "get", lambda: {})()
+                if isinstance(state, dict):
+                    recent_turns = state.get("recent_turns") or []
+                recent_turns = getattr(context, "recent_turns", recent_turns) or []
+            if recent_turns:
+                history_lines = []
+                for t in recent_turns[-6:]:
+                    if isinstance(t, dict):
+                        role = t.get("role", "user")
+                        content = (
+                            t.get("full_content")
+                            or t.get("content_preview")
+                            or ""
+                        )
+                    else:
+                        role = getattr(t, "role", "user")
+                        content = (
+                            getattr(t, "full_content", None)
+                            or getattr(t, "content_preview", "")
+                        )
+                    if content:
+                        history_lines.append(f"{role}: {str(content)[:200]}")
+                if history_lines:
+                    context_section = (
+                        "\n\n以下是最近的对话历史（仅用于理解上下文，"
+                        "若与当前问题无关请忽略）：\n"
+                        + "\n".join(history_lines)
+                    )
+
+        memory_section = ""
+        if memory is not None:
+            memory_keys = getattr(memory, "list", lambda: [])()
+            memory_items = []
+            for key in memory_keys:
+                if key == "history":
+                    continue
+                value = memory.retrieve(key)
+                if value is not None:
+                    memory_items.append(f"- {key}: {value}")
+            if memory_items:
+                memory_section = (
+                    "\n\n以下是关于用户的长期记忆（仅在与当前问题相关时参考）：\n"
+                    + "\n".join(memory_items)
+                )
+
         prompt = (
             "You are a supervisor agent. You have two subagents:\n"
             "- researcher: good at research, analysis, and summarization\n"
@@ -547,6 +603,7 @@ class Agent:
             'or\n'
             '{"action": "delegate", "tasks": [{"agent": "researcher|writer", "description": "task description"}, ...]}\n\n'
             f"User request: {user_input}\n"
+            f"{context_section}{memory_section}\n"
             "Decision:"
         )
         raw = self.model.complete(prompt)
@@ -605,6 +662,17 @@ class Agent:
             result = asyncio.run(self._process_turn_event_driven(user_input))
         else:
             result = self._process_turn_sync(user_input)
+
+        # 将助手响应也记录到 Context，保证跨轮可回忆。
+        if self._context_enabled():
+            try:
+                self.context.update_with_result({
+                    "tool_name": "assistant",
+                    "params": {},
+                    "result_preview": str(result),
+                })
+            except Exception:  # noqa: BLE001 - 防御性：不因 context 记录失败中断主流程
+                pass
 
         self._after_turn(user_input, result)
 
