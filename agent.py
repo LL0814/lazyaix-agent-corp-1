@@ -140,6 +140,10 @@ class Agent:
         parts = []
 
         if self._memory_enabled():
+            long_term_memory = self._retrieve_long_term_memories(user_input)
+            if long_term_memory:
+                parts.append(long_term_memory)
+
             history = self.memory.retrieve("history") or []
             memory_text = "\n".join(
                 f"Q: {h['input']}\nA: {h['response']}" for h in history[-3:]
@@ -159,11 +163,41 @@ class Agent:
         parts.append(f"Q: {user_input}")
         return "\n\n".join(parts)
 
+    def _retrieve_long_term_memories(self, user_input):
+        if not hasattr(self.memory, "search") or not hasattr(self.memory, "debug_counts"):
+            return ""
+        try:
+            counts = self.memory.debug_counts()
+            if getattr(counts, "records", 0) <= 0:
+                return ""
+            top_k = int(self.config.get("MEMORY_PROMPT_TOP_K", "5"))
+            results = self.memory.search(user_input, top_k=top_k)
+        except Exception:
+            return ""
+        if not results:
+            return ""
+        lines = [f"- [{result.kind.value}] {result.content}" for result in results]
+        return "Long-term memories:\n" + "\n".join(lines)
+
     def _remember(self, user_input, response):
         """Store the turn in memory when ENABLE_MEMORY is true."""
         history = self.memory.retrieve("history") or []
         history.append({"input": user_input, "response": response})
         self.memory.store("history", history[-10:])
+        self._process_memory_outbox()
+
+    def _process_memory_outbox(self):
+        if not hasattr(self.memory, "process_outbox"):
+            return
+        config = getattr(self.memory, "config", None)
+        auto_process = getattr(config, "auto_process_outbox", True)
+        if not auto_process:
+            return
+        limit = int(self.config.get("MEMORY_WORKER_LIMIT", "10"))
+        try:
+            self.memory.process_outbox(limit=limit)
+        except Exception:
+            return
 
     def process_turn(self, user_input: str) -> str:
         """Run a single turn.

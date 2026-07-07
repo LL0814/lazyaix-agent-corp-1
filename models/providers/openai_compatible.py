@@ -19,13 +19,14 @@ class OpenAICompatibleProvider(BaseProvider):
     supported_models: list[str] = []
 
     def __init__(self, api_key: str, model_name: str, base_url: str | None = None):
-        super().__init__(api_key, model_name, base_url)
+        effective_base_url = base_url or self.default_base_url
+        super().__init__(api_key, model_name, effective_base_url)
         # 当 API Key 缺失时延迟构建客户端，
         # 以便 Agent 仍能启动并在请求时给出友好提示。
         if api_key:
             self._client = OpenAI(
                 api_key=api_key,
-                base_url=base_url or self.default_base_url,
+                base_url=effective_base_url,
             )
         else:
             self._client = None

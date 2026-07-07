@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from memory.audit import DEFAULT_ACTOR
-from memory.classifier import classify_memory_candidate
 from memory.redaction import redact_text
 
 
@@ -42,7 +41,7 @@ class MemoryOutboxWorker:
                 return
 
             redacted = redact_text(text)
-            classification = classify_memory_candidate(redacted.text)
+            classification = self.memory._candidate_extractor.extract(redacted.text)
             if not classification.should_remember:
                 self._mark_skipped(
                     event_id,
@@ -54,6 +53,7 @@ class MemoryOutboxWorker:
                             "confidence": classification.confidence,
                             "importance": classification.importance,
                             "reason": classification.reason,
+                            "content": classification.content,
                             "redacted": redacted.redacted,
                             "redaction_markers": redacted.markers,
                         },
@@ -63,8 +63,9 @@ class MemoryOutboxWorker:
                 )
                 return
 
+            memory_content = classification.content or redacted.text
             memory_id = self.memory.remember(
-                redacted.text,
+                memory_content,
                 kind=classification.kind.value,
                 metadata={
                     "outbox_event_id": event_id,
@@ -75,6 +76,8 @@ class MemoryOutboxWorker:
                     "source_ref": event_id,
                     "outbox_payload": payload,
                 },
+                confidence=classification.confidence,
+                importance=classification.importance,
             )
             processed_payload = {
                 **payload,
@@ -85,6 +88,7 @@ class MemoryOutboxWorker:
                     "confidence": classification.confidence,
                     "importance": classification.importance,
                     "reason": classification.reason,
+                    "content": memory_content,
                     "redacted": redacted.redacted,
                     "redaction_markers": redacted.markers,
                 },

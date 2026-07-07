@@ -2,7 +2,7 @@ from pathlib import Path
 
 from memory import Memory
 from memory.embeddings import FakeEmbeddingProvider
-from memory.models import MemoryKind
+from memory.models import MemoryClassification, MemoryKind
 
 
 class FakeIndex:
@@ -39,11 +39,22 @@ class FailingIndex(FakeIndex):
         raise RuntimeError("qdrant boom")
 
 
-def make_memory(tmp_path: Path, *, vector_index=None) -> Memory:
+class StaticExtractor:
+    def __init__(self, classification: MemoryClassification):
+        self.classification = classification
+        self.seen_texts = []
+
+    def extract(self, text: str) -> MemoryClassification:
+        self.seen_texts.append(text)
+        return self.classification
+
+
+def make_memory(tmp_path: Path, *, vector_index=None, candidate_extractor=None) -> Memory:
     return Memory(
         config={"MEMORY_DB_PATH": str(tmp_path / "memory.sqlite3")},
         embedding_provider=FakeEmbeddingProvider(),
         vector_index=vector_index or FakeIndex(),
+        candidate_extractor=candidate_extractor,
     )
 
 
@@ -126,3 +137,30 @@ def test_process_outbox_respects_limit(tmp_path: Path):
     assert result["processed"] == 1
     assert statuses.count("processed") == 1
     assert statuses.count("pending") == 1
+
+
+def test_process_outbox_stores_extractor_content_instead_of_raw_turn(tmp_path: Path):
+    extractor = StaticExtractor(
+        MemoryClassification(
+            should_remember=True,
+            kind=MemoryKind.SEMANTIC,
+            content="用户偏好入住安静的酒店。",
+            confidence=0.91,
+            importance=0.82,
+            reason="DeepSeek 抽取出的稳定偏好",
+        )
+    )
+    memory = make_memory(tmp_path, candidate_extractor=extractor)
+    memory.store("history", [{"input": "我喜欢安静一点的酒店", "response": "已记录"}])
+
+    result = memory.process_outbox(limit=10)
+
+    row = memory._sqlite.list_outbox()[0]
+    record = memory._sqlite.list_active_records()[0]
+
+    assert result["processed"] == 1
+    assert extractor.seen_texts == ["Q: 我喜欢安静一点的酒店\nA: 已记录"]
+    assert record.content == "用户偏好入住安静的酒店。"
+    assert record.confidence == 0.91
+    assert record.importance == 0.82
+    assert row["payload"]["worker_result"]["content"] == "用户偏好入住安静的酒店。"

@@ -1,6 +1,7 @@
 """根据厂商名称创建 Provider 实例的工厂。"""
 
 from .providers.base import BaseProvider
+from .providers.deepseek import DeepSeekProvider
 from .providers.glm import GLMProvider
 from .providers.kimi import KimiProvider
 from .providers.tongyi import TongyiProvider
@@ -13,6 +14,7 @@ class ProviderFactory:
         "tongyi": TongyiProvider,
         "glm": GLMProvider,
         "kimi": KimiProvider,
+        "deepseek": DeepSeekProvider,
     }
 
     @classmethod

@@ -79,6 +79,7 @@ class RedactionResult(BaseModel):
 class MemoryClassification(BaseModel):
     should_remember: bool
     kind: MemoryKind = MemoryKind.EPISODIC
+    content: str | None = None
     confidence: float = 0.5
     importance: float = 0.5
     reason: str = ""

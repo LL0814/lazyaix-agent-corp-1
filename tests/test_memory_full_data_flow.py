@@ -189,7 +189,7 @@ def test_history_outbox_to_candidate_to_record_data_flow(tmp_path: Path):
             },
             {
                 "from": "memory_outbox.pending",
-                "to": "Memory.process_outbox -> redact_text -> classify_memory_candidate",
+                "to": "Memory.process_outbox -> redact_text -> candidate_extractor",
                 "worker_result": worker_result,
                 "process_result": result,
             },

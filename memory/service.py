@@ -16,6 +16,7 @@ from memory.backends.sqlite_store import SQLiteMemoryStore
 from memory.config import MemoryConfig
 from memory.embeddings import BGEM3EmbeddingProvider
 from memory.exporter import export_jsonl, export_markdown, parse_jsonl
+from memory.extractors import MemoryCandidateExtractor, create_memory_candidate_extractor
 from memory.models import (
     DebugCounts,
     MemoryKind,
@@ -43,6 +44,7 @@ class Memory:
         config: dict[str, Any] | MemoryConfig | None = None,
         embedding_provider: Any | None = None,
         vector_index: Any | None = None,
+        candidate_extractor: MemoryCandidateExtractor | None = None,
     ):
         if isinstance(config, MemoryConfig):
             self.config = config
@@ -61,6 +63,9 @@ class Memory:
             url=self.config.qdrant_url,
             collection_name=self.config.qdrant_collection,
             vector_size=self.config.embedding_dimension,
+        )
+        self._candidate_extractor = candidate_extractor or create_memory_candidate_extractor(
+            self.config
         )
 
     def store(self, key: str, value: object) -> None:
@@ -90,6 +95,8 @@ class Memory:
         scope: str = "project",
         metadata: dict[str, Any] | None = None,
         source: dict[str, Any] | None = None,
+        confidence: float = 1.0,
+        importance: float = 0.5,
     ) -> str:
         if self._sqlite is None:
             raise RuntimeError("Semantic memory requires the sqlite backend.")
@@ -119,6 +126,8 @@ class Memory:
             kind=MemoryKind(kind),
             content=redacted.text,
             metadata=metadata,
+            confidence=confidence,
+            importance=importance,
             source_id=source_ref.source_id,
         )
         vector = self._embedding_provider.embed(redacted.text)

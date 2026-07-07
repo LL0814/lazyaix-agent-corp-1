@@ -9,7 +9,7 @@ history
 -> memory_outbox.pending
 -> process_outbox worker
 -> redact_text
--> classify_memory_candidate
+-> candidate_extractor
 -> Memory.remember
 -> SQLite memory_records / memory_sources
 -> Qdrant vector

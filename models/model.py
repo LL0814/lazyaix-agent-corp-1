@@ -21,6 +21,7 @@ class Model:
 
     - ``TONGYI_API_KEY`` / ``TONGYI_BASE_URL``
     - ``GLM_API_KEY`` / ``GLM_BASE_URL``
+    - ``DEEPSEEK_API_KEY`` / ``DEEPSEEK_BASE_URL``，也兼容 ``DS_API_KEY`` / ``DS_BASE_URL``
 
     支持运行时通过 ``switch(model_spec)`` 切换模型。
     """
@@ -56,8 +57,12 @@ class Model:
         """
         prefix = provider.upper()
         raw_key = os.environ.get(f"{prefix}_API_KEY", "")
+        if provider == "deepseek" and not raw_key:
+            raw_key = os.environ.get("DS_API_KEY", "")
         api_key = "" if "请在此" in raw_key else raw_key
         base_url = os.environ.get(f"{prefix}_BASE_URL", "") or None
+        if provider == "deepseek" and base_url is None:
+            base_url = os.environ.get("DS_BASE_URL", "") or None
         return api_key, base_url
 
     @staticmethod

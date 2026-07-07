@@ -32,10 +32,21 @@ class MemoryConfig(BaseModel):
     qdrant_collection: str = "agent_memories_v1"
     embedding_model: str = "BAAI/bge-m3"
     embedding_dimension: int = 1024
+    extractor_provider: str = "rule"
+    extractor_fallback_to_rule: bool = True
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-pro"
+    auto_process_outbox: bool = True
 
     @classmethod
     def from_env(cls, overrides: dict[str, Any] | None = None) -> "MemoryConfig":
         overrides = cls._normalize_overrides(overrides or {})
+        deepseek_api_key = (
+            os.getenv("MEMORY_DEEPSEEK_API_KEY")
+            or os.getenv("DEEPSEEK_API_KEY")
+            or os.getenv("DS_API_KEY", "")
+        )
         data = {
             "enable_memory": _bool(os.getenv("ENABLE_MEMORY"), True),
             "use_memories": _bool(os.getenv("MEMORY_USE_MEMORIES"), True),
@@ -52,6 +63,21 @@ class MemoryConfig(BaseModel):
             "qdrant_collection": os.getenv("QDRANT_COLLECTION", "agent_memories_v1"),
             "embedding_model": os.getenv("MEMORY_EMBEDDING_MODEL", "BAAI/bge-m3"),
             "embedding_dimension": int(os.getenv("MEMORY_EMBEDDING_DIMENSION", "1024")),
+            "extractor_provider": os.getenv("MEMORY_EXTRACTOR_PROVIDER", "rule"),
+            "extractor_fallback_to_rule": _bool(os.getenv("MEMORY_EXTRACTOR_FALLBACK_TO_RULE"), True),
+            "deepseek_api_key": deepseek_api_key,
+            "deepseek_base_url": (
+                os.getenv("MEMORY_DEEPSEEK_BASE_URL")
+                or os.getenv("DEEPSEEK_BASE_URL")
+                or os.getenv("DS_BASE_URL")
+                or "https://api.deepseek.com"
+            ),
+            "deepseek_model": (
+                os.getenv("MEMORY_DEEPSEEK_MODEL")
+                or os.getenv("DEEPSEEK_MODEL")
+                or "deepseek-v4-pro"
+            ),
+            "auto_process_outbox": _bool(os.getenv("MEMORY_AUTO_PROCESS_OUTBOX"), True),
         }
         data.update(overrides)
         return cls(**data)
@@ -74,6 +100,17 @@ class MemoryConfig(BaseModel):
             "QDRANT_COLLECTION": "qdrant_collection",
             "MEMORY_EMBEDDING_MODEL": "embedding_model",
             "MEMORY_EMBEDDING_DIMENSION": "embedding_dimension",
+            "MEMORY_EXTRACTOR_PROVIDER": "extractor_provider",
+            "MEMORY_EXTRACTOR_FALLBACK_TO_RULE": "extractor_fallback_to_rule",
+            "MEMORY_DEEPSEEK_API_KEY": "deepseek_api_key",
+            "DEEPSEEK_API_KEY": "deepseek_api_key",
+            "DS_API_KEY": "deepseek_api_key",
+            "MEMORY_DEEPSEEK_BASE_URL": "deepseek_base_url",
+            "DEEPSEEK_BASE_URL": "deepseek_base_url",
+            "DS_BASE_URL": "deepseek_base_url",
+            "MEMORY_DEEPSEEK_MODEL": "deepseek_model",
+            "DEEPSEEK_MODEL": "deepseek_model",
+            "MEMORY_AUTO_PROCESS_OUTBOX": "auto_process_outbox",
         }
         normalized: dict[str, Any] = {}
         for key, value in overrides.items():
