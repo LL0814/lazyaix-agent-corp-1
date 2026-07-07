@@ -26,7 +26,7 @@ class Model:
     支持运行时通过 ``switch(model_spec)`` 切换模型。
     """
 
-    DEFAULT_MODEL = "tongyi:qwen-turbo"
+    DEFAULT_MODEL = "deepseek:deepseek-v4-pro"
 
     def __init__(self):
         provider, model_name = self._parse_model_spec(
