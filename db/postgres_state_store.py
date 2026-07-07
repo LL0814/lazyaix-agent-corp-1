@@ -78,7 +78,7 @@ class PostgresStateStore:
                 await conn.execute(
                     """
                     INSERT INTO workflows (workflow_id, trace_id, parent_workflow_id, user_input, status, final_result, error_info, version)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    VALUES ($1::uuid, $2, $3, $4, $5::varchar, $6, $7, $8)
                     ON CONFLICT (workflow_id) DO UPDATE SET
                         trace_id = EXCLUDED.trace_id,
                         parent_workflow_id = EXCLUDED.parent_workflow_id,
@@ -107,20 +107,20 @@ class PostgresStateStore:
                     await conn.execute(
                         """
                         DELETE FROM tasks
-                        WHERE workflow_id = $1
-                          AND task_id NOT IN (SELECT unnest($2::uuid[]))
+                        WHERE workflow_id = $1::uuid
+                          AND task_id::uuid NOT IN (SELECT unnest($2::uuid[]))
                         """,
                         workflow.workflow_id,
                         task_ids,
                     )
                 else:
                     await conn.execute(
-                        "DELETE FROM tasks WHERE workflow_id = $1",
+                        "DELETE FROM tasks WHERE workflow_id = $1::uuid",
                         workflow.workflow_id,
                     )
 
                 await conn.execute(
-                    "DELETE FROM task_dependencies WHERE workflow_id = $1",
+                    "DELETE FROM task_dependencies WHERE workflow_id = $1::uuid",
                     workflow.workflow_id,
                 )
                 for task in workflow.tasks.values():
@@ -134,7 +134,7 @@ class PostgresStateStore:
                 task_id, workflow_id, parent_task_id, task_type, target_capability, target_agent,
                 instructions, input, input_refs, required_for_completion, status,
                 result, error_info, retry_count, max_retries, priority, version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+            ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11::varchar, $12, $13, $14, $15, $16, $17)
             ON CONFLICT (task_id) DO UPDATE SET
                 workflow_id = EXCLUDED.workflow_id,
                 parent_task_id = EXCLUDED.parent_task_id,
@@ -165,7 +165,7 @@ class PostgresStateStore:
         self, conn: asyncpg.Connection, task: Task, workflow_id: str
     ) -> None:
         await conn.execute(
-            "DELETE FROM task_dependencies WHERE workflow_id = $1 AND task_id = $2",
+            "DELETE FROM task_dependencies WHERE workflow_id = $1::uuid::uuid AND task_id = $2",
             workflow_id,
             task.task_id,
         )
@@ -173,7 +173,7 @@ class PostgresStateStore:
             await conn.execute(
                 """
                 INSERT INTO task_dependencies (workflow_id, task_id, depends_on_task_id)
-                VALUES ($1, $2, $3)
+                VALUES ($1::uuid, $2::uuid, $3::uuid)
                 ON CONFLICT DO NOTHING
                 """,
                 workflow_id,
@@ -184,16 +184,16 @@ class PostgresStateStore:
     async def get_workflow(self, workflow_id: str) -> Workflow | None:
         async with self._pool.acquire() as conn:
             wf_row = await conn.fetchrow(
-                "SELECT * FROM workflows WHERE workflow_id = $1", workflow_id
+                "SELECT * FROM workflows WHERE workflow_id = $1::uuid", workflow_id
             )
             if wf_row is None:
                 return None
             task_rows = await conn.fetch(
-                "SELECT * FROM tasks WHERE workflow_id = $1", workflow_id
+                "SELECT * FROM tasks WHERE workflow_id = $1::uuid", workflow_id
             )
             tasks = {str(row["task_id"]): _row_to_task(row) for row in task_rows}
             dep_rows = await conn.fetch(
-                "SELECT task_id, depends_on_task_id FROM task_dependencies WHERE workflow_id = $1",
+                "SELECT task_id, depends_on_task_id FROM task_dependencies WHERE workflow_id = $1::uuid",
                 workflow_id,
             )
             for row in dep_rows:
@@ -210,9 +210,9 @@ class PostgresStateStore:
             result = await conn.execute(
                 """
                 UPDATE workflows
-                SET status = $1, updated_at = NOW(), version = version + 1,
-                    completed_at = CASE WHEN $1 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE completed_at END
-                WHERE workflow_id = $2 AND version = $3
+                SET status = $1::varchar, updated_at = NOW(), version = version + 1,
+                    completed_at = CASE WHEN $1::varchar IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE completed_at END
+                WHERE workflow_id = $2::uuid AND version = $3
                 """,
                 status.value,
                 workflow_id,
@@ -223,7 +223,7 @@ class PostgresStateStore:
     async def save_task(self, task: Task) -> None:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                row = await conn.fetchrow("SELECT workflow_id FROM tasks WHERE task_id = $1", task.task_id)
+                row = await conn.fetchrow("SELECT workflow_id FROM tasks WHERE task_id = $1::uuid", task.task_id)
                 workflow_id = row["workflow_id"] if row else None
                 if workflow_id is None:
                     raise RuntimeError(f"Cannot save orphan task {task.task_id} without workflow_id")
@@ -232,12 +232,12 @@ class PostgresStateStore:
 
     async def get_task(self, task_id: str) -> Task | None:
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM tasks WHERE task_id = $1", task_id)
+            row = await conn.fetchrow("SELECT * FROM tasks WHERE task_id = $1::uuid", task_id)
             if row is None:
                 return None
             task = _row_to_task(row)
             dep_rows = await conn.fetch(
-                "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = $1",
+                "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = $1::uuid",
                 task_id,
             )
             task.dependencies = [str(r["depends_on_task_id"]) for r in dep_rows]
@@ -256,14 +256,14 @@ class PostgresStateStore:
             res = await conn.execute(
                 """
                 UPDATE tasks
-                SET status = $1,
+                SET status = $1::varchar,
                     result = COALESCE($2, result),
                     error_info = COALESCE($3, error_info),
                     updated_at = NOW(),
                     version = version + 1,
-                    started_at = CASE WHEN $1 = 'running' AND started_at IS NULL THEN NOW() ELSE started_at END,
-                    completed_at = CASE WHEN $1 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE completed_at END
-                WHERE task_id = $4 AND version = $5
+                    started_at = CASE WHEN $1::varchar = 'running' AND started_at IS NULL THEN NOW() ELSE started_at END,
+                    completed_at = CASE WHEN $1::varchar IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE completed_at END
+                WHERE task_id = $4::uuid AND version = $5
                 """,
                 status.value,
                 json.dumps(result) if result is not None else None,

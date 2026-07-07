@@ -31,7 +31,7 @@ async def test_redis_idempotency_acquire(redis_client):
 
     assert await store.acquire(key, ttl_seconds=60) is True
     assert await store.acquire(key, ttl_seconds=60) is False
-    await redis_client.close()
+    await redis_client.aclose()
 
 
 @pytest.mark.asyncio

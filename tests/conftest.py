@@ -39,6 +39,12 @@ async def postgres_pool():
     try:
         yield pool
     finally:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "TRUNCATE TABLE processed_events, outbox_events, event_store, dlq, "
+                "task_dependencies, tasks, workflows "
+                "RESTART IDENTITY CASCADE;"
+            )
         await pool.close()
         if container is not None:
             container.stop()

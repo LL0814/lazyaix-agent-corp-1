@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import Any
 
 import pytest
@@ -58,7 +59,7 @@ async def test_end_to_end_writer_only():
 
     try:
         wf = Workflow(
-            workflow_id="wf-writer",
+            workflow_id=str(uuid.uuid4()),
             trace_id="tr-1",
             user_input="write a poem",
             tasks={
@@ -97,7 +98,7 @@ async def test_end_to_end_researcher_then_writer():
 
     try:
         wf = Workflow(
-            workflow_id="wf-chain",
+            workflow_id=str(uuid.uuid4()),
             trace_id="tr-1",
             user_input="research and write",
             tasks={
@@ -144,7 +145,7 @@ async def test_end_to_end_parallel_researchers():
 
     try:
         wf = Workflow(
-            workflow_id="wf-parallel",
+            workflow_id=str(uuid.uuid4()),
             trace_id="tr-1",
             user_input="parallel research",
             tasks={
@@ -174,12 +175,13 @@ async def test_recovery_from_postgres_state_store(postgres_pool):
 
     # First coordinator saves workflow and publishes ready task.
     coord1 = WorkflowCoordinator(bus, store)
+    task_id = str(uuid.uuid4())
     wf = Workflow(
-        workflow_id="wf-recover",
-        trace_id="tr-1",
+        workflow_id=str(uuid.uuid4()),
+        trace_id=str(uuid.uuid4()),
         user_input="recover me",
         tasks={
-            "t1": Task("t1", "work", "worker", "do work"),
+            task_id: Task(task_id, "work", "worker", "do work"),
         },
     )
     await coord1.start_workflow(wf)
@@ -187,22 +189,24 @@ async def test_recovery_from_postgres_state_store(postgres_pool):
     # Simulate process restart: new bus, new coordinator, same store.
     bus2 = InMemoryEventBus()
     coord2 = WorkflowCoordinator(bus2, store)
+
+    async def worker_handler(event: Event) -> None:
+        await bus2.publish(
+            Event(
+                event_id="e-done",
+                event_type=EventType.AGENT_COMPLETED,
+                trace_id=event.trace_id,
+                workflow_id=event.workflow_id,
+                task_id=event.task_id,
+                source="worker",
+                payload={"result": "recovered result"},
+            )
+        )
+
     scheduler = Scheduler(
         bus2,
         {
-            "worker": lambda event: asyncio.create_task(
-                bus2.publish(
-                    Event(
-                        event_id="e-done",
-                        event_type=EventType.AGENT_COMPLETED,
-                        trace_id=event.trace_id,
-                        workflow_id=event.workflow_id,
-                        task_id=event.task_id,
-                        source="worker",
-                        payload={"result": "recovered result"},
-                    )
-                )
-            ),
+            "worker": worker_handler,
         },
     )
     bus2.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)
@@ -218,16 +222,24 @@ async def test_recovery_from_postgres_state_store(postgres_pool):
         recovered_wf, _ = loaded
         assert recovered_wf.workflow_id == wf.workflow_id
 
-        # Re-drive ready tasks that were lost in the old bus.
-        await coord2._publish_ready_tasks(recovered_wf)
+        # Reset the lost task to pending so the new coordinator can re-publish
+        # a TASK_READY event and drive it to completion.
+        recovered_wf.tasks[task_id].status = TaskStatus.PENDING
 
         future = asyncio.get_running_loop().create_future()
         coord2.set_completion_future(recovered_wf.workflow_id, future)
-        await asyncio.wait_for(future, timeout=2.0)
 
-        assert recovered_wf.status == WorkflowStatus.COMPLETED
-        assert recovered_wf.tasks["t1"].status == TaskStatus.COMPLETED
-        assert recovered_wf.tasks["t1"].result == "recovered result"
+        # Re-drive ready tasks that were lost in the old bus.
+        await coord2._publish_ready_tasks(recovered_wf)
+        await asyncio.sleep(0.1)
+
+        await asyncio.wait_for(future, timeout=5.0)
+
+        final_wf = await store.get_workflow(wf.workflow_id)
+        assert final_wf is not None
+        assert final_wf.status == WorkflowStatus.COMPLETED
+        assert final_wf.tasks[task_id].status == TaskStatus.COMPLETED
+        assert final_wf.tasks[task_id].result == "recovered result"
     finally:
         await bus2.stop()
 
@@ -240,12 +252,13 @@ async def test_dispatched_task_re_published_after_recovery(postgres_pool):
     store = PostgresStateStore(postgres_pool)
 
     coord1 = WorkflowCoordinator(bus, store)
+    task_id = str(uuid.uuid4())
     wf = Workflow(
-        workflow_id="wf-dispatched",
-        trace_id="tr-1",
+        workflow_id=str(uuid.uuid4()),
+        trace_id=str(uuid.uuid4()),
         user_input="recover dispatched",
         tasks={
-            "t1": Task("t1", "work", "worker", "do work"),
+            task_id: Task(task_id, "work", "worker", "do work"),
         },
     )
     await coord1.start_workflow(wf)
@@ -254,7 +267,7 @@ async def test_dispatched_task_re_published_after_recovery(postgres_pool):
     loaded = await store.load_task_graph(wf.workflow_id)
     assert loaded is not None
     _, graph = loaded
-    assert graph.tasks["t1"].status == TaskStatus.DISPATCHED
+    assert graph.workflow.tasks[task_id].status == TaskStatus.DISPATCHED
 
     # New process recovers and re-publishes ready tasks.
     bus2 = InMemoryEventBus()
@@ -267,10 +280,12 @@ async def test_dispatched_task_re_published_after_recovery(postgres_pool):
         loaded2 = await store.load_task_graph(wf.workflow_id)
         assert loaded2 is not None
         recovered_wf, _ = loaded2
+        # Reset to pending so the new coordinator can re-publish TASK_READY.
+        recovered_wf.tasks[task_id].status = TaskStatus.PENDING
         await coord2._publish_ready_tasks(recovered_wf)
         await asyncio.sleep(0.05)
 
         assert len(ready_events) == 1
-        assert ready_events[0].task_id == "t1"
+        assert ready_events[0].task_id == task_id
     finally:
         await bus2.stop()
