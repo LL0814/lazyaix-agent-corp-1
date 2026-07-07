@@ -11,7 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from memory.models import DebugCounts
+from memory.models import (
+    DebugCounts,
+    MemoryKind,
+    MemoryRecord,
+    MemoryScope,
+    MemoryStatus,
+    SourceRef,
+)
 
 
 class SQLiteMemoryStore:
@@ -64,6 +71,41 @@ class SQLiteMemoryStore:
                     target_id TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_sources (
+                    source_id TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL,
+                    source_ref TEXT NOT NULL,
+                    excerpt TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_records (
+                    memory_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    thread_id TEXT,
+                    scope TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    importance REAL NOT NULL,
+                    sensitivity TEXT NOT NULL,
+                    source_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    expires_at TEXT
                 )
                 """
             )
@@ -212,9 +254,135 @@ class SQLiteMemoryStore:
         raw = json.dumps(turn, ensure_ascii=False, sort_keys=True, default=str)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
+    def insert_source(self, source: SourceRef) -> str:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_sources (
+                    source_id, source_type, source_ref, excerpt, metadata_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source.source_id,
+                    source.source_type,
+                    source.source_ref,
+                    source.excerpt,
+                    json.dumps(source.metadata, ensure_ascii=False),
+                    source.created_at.isoformat(),
+                ),
+            )
+            conn.commit()
+        return source.source_id
+
+    def insert_record(self, record: MemoryRecord) -> str:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_records (
+                    memory_id, tenant_id, user_id, project_id, thread_id, scope,
+                    kind, content, metadata_json, status, confidence, importance,
+                    sensitivity, source_id, created_at, updated_at, expires_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.memory_id,
+                    record.tenant_id,
+                    record.user_id,
+                    record.project_id,
+                    record.thread_id,
+                    record.scope.value,
+                    record.kind.value,
+                    record.content,
+                    json.dumps(record.metadata, ensure_ascii=False),
+                    record.status.value,
+                    record.confidence,
+                    record.importance,
+                    record.sensitivity,
+                    record.source_id,
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                    record.expires_at.isoformat() if record.expires_at else None,
+                ),
+            )
+            conn.commit()
+        return record.memory_id
+
+    def get_record(self, memory_id: str) -> MemoryRecord | None:
+        row = self._fetch_record_row(memory_id)
+        return self._record_from_row(row) if row is not None else None
+
+    def list_records(self, memory_ids: list[str]) -> list[MemoryRecord]:
+        return [
+            record
+            for memory_id in memory_ids
+            if (record := self.get_record(memory_id)) is not None
+        ]
+
+    def mark_deleted(self, memory_id: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE memory_records
+                SET status = ?, updated_at = ?
+                WHERE memory_id = ? AND status != ?
+                """,
+                (
+                    MemoryStatus.DELETED.value,
+                    self._now(),
+                    memory_id,
+                    MemoryStatus.DELETED.value,
+                ),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+
+    def _fetch_record_row(self, memory_id: str) -> sqlite3.Row | None:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM memory_records WHERE memory_id = ?",
+                (memory_id,),
+            ).fetchone()
+
+    @staticmethod
+    def _parse_datetime(value: str | None) -> datetime | None:
+        if value is None:
+            return None
+        return datetime.fromisoformat(value)
+
+    def _record_from_row(self, row: sqlite3.Row) -> MemoryRecord:
+        return MemoryRecord(
+            memory_id=row["memory_id"],
+            tenant_id=row["tenant_id"],
+            user_id=row["user_id"],
+            project_id=row["project_id"],
+            thread_id=row["thread_id"],
+            scope=MemoryScope(row["scope"]),
+            kind=MemoryKind(row["kind"]),
+            content=row["content"],
+            metadata=json.loads(row["metadata_json"]),
+            status=MemoryStatus(row["status"]),
+            confidence=float(row["confidence"]),
+            importance=float(row["importance"]),
+            sensitivity=row["sensitivity"],
+            source_id=row["source_id"],
+            created_at=self._parse_datetime(row["created_at"]) or datetime.utcnow(),
+            updated_at=self._parse_datetime(row["updated_at"]) or datetime.utcnow(),
+            expires_at=self._parse_datetime(row["expires_at"]),
+        )
+
     def counts(self) -> DebugCounts:
         with self._connect() as conn:
             kv_count = conn.execute("SELECT COUNT(*) FROM memory_kv").fetchone()[0]
             outbox_count = conn.execute("SELECT COUNT(*) FROM memory_outbox").fetchone()[0]
             audit_count = conn.execute("SELECT COUNT(*) FROM memory_audit_log").fetchone()[0]
-        return DebugCounts(kv=kv_count, outbox=outbox_count, audit=audit_count)
+            records_count = conn.execute("SELECT COUNT(*) FROM memory_records").fetchone()[0]
+            sources_count = conn.execute("SELECT COUNT(*) FROM memory_sources").fetchone()[0]
+        return DebugCounts(
+            kv=kv_count,
+            records=records_count,
+            sources=sources_count,
+            outbox=outbox_count,
+            audit=audit_count,
+        )

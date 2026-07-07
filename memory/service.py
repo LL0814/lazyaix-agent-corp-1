@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
-from memory.audit import ACTION_KV_STORED, ACTION_OUTBOX_ENQUEUED, DEFAULT_ACTOR
+from memory.audit import (
+    ACTION_KV_STORED,
+    ACTION_MEMORY_FORGOTTEN,
+    ACTION_OUTBOX_ENQUEUED,
+    DEFAULT_ACTOR,
+)
+from memory.backends.qdrant_store import QdrantMemoryIndex
 from memory.backends.sqlite_store import SQLiteMemoryStore
 from memory.config import MemoryConfig
-from memory.models import DebugCounts
+from memory.embeddings import BGEM3EmbeddingProvider
+from memory.models import (
+    DebugCounts,
+    MemoryKind,
+    MemoryRecord,
+    MemoryScope,
+    MemorySearchResult,
+    MemoryStatus,
+    RedactionResult,
+    SourceRef,
+)
+from memory.redaction import redact_text
+from memory.retrieval import combined_score
 
 
 class Memory:
@@ -17,7 +36,12 @@ class Memory:
     dictionary available via MEMORY_BACKEND=memory for tests and fallback.
     """
 
-    def __init__(self, config: dict[str, Any] | MemoryConfig | None = None):
+    def __init__(
+        self,
+        config: dict[str, Any] | MemoryConfig | None = None,
+        embedding_provider: Any | None = None,
+        vector_index: Any | None = None,
+    ):
         if isinstance(config, MemoryConfig):
             self.config = config
         else:
@@ -27,6 +51,14 @@ class Memory:
             SQLiteMemoryStore(self.config.db_path)
             if self.config.backend == "sqlite"
             else None
+        )
+        self._embedding_provider = embedding_provider or BGEM3EmbeddingProvider(
+            model_name=self.config.embedding_model
+        )
+        self._vector_index = vector_index or QdrantMemoryIndex(
+            url=self.config.qdrant_url,
+            collection_name=self.config.qdrant_collection,
+            vector_size=self.config.embedding_dimension,
         )
 
     def store(self, key: str, value: object) -> None:
@@ -47,6 +79,117 @@ class Memory:
         if self._sqlite is not None:
             return self._sqlite.counts()
         return DebugCounts(kv=len(self._store))
+
+    def remember(
+        self,
+        content: str,
+        *,
+        kind: str = "semantic",
+        scope: str = "project",
+        metadata: dict[str, Any] | None = None,
+        source: dict[str, Any] | None = None,
+    ) -> str:
+        if self._sqlite is None:
+            raise RuntimeError("Semantic memory requires the sqlite backend.")
+
+        metadata = metadata or {}
+        source = source or {}
+        redacted = (
+            redact_text(content)
+            if self.config.redact_secrets
+            else RedactionResult(text=content)
+        )
+        memory_id = f"mem_{uuid.uuid4().hex}"
+        source_ref = SourceRef(
+            source_id=f"src_{uuid.uuid4().hex}",
+            source_type=str(source.get("source_type", "manual")),
+            source_ref=str(source.get("source_ref", "")),
+            excerpt=redacted.text[:500],
+            metadata=source,
+        )
+        record = MemoryRecord(
+            memory_id=memory_id,
+            tenant_id=self.config.tenant_id,
+            user_id=self.config.user_id,
+            project_id=self.config.project_id,
+            thread_id=self.config.thread_id,
+            scope=MemoryScope(scope),
+            kind=MemoryKind(kind),
+            content=redacted.text,
+            metadata=metadata,
+            source_id=source_ref.source_id,
+        )
+        self._sqlite.insert_source(source_ref)
+        self._sqlite.insert_record(record)
+        vector = self._embedding_provider.embed(redacted.text)
+        self._vector_index.upsert_memory(record, vector)
+        self._sqlite.append_audit(
+            DEFAULT_ACTOR,
+            "memory.record.remembered",
+            memory_id,
+            {"kind": kind, "scope": scope},
+        )
+        return memory_id
+
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 5,
+        scope: str | None = None,
+        project_id: str | None = None,
+        include_sources: bool = True,
+    ) -> list[MemorySearchResult]:
+        if not self.config.use_memories or self._sqlite is None:
+            return []
+
+        vector = self._embedding_provider.embed(query)
+        filters = {
+            "tenant_id": self.config.tenant_id,
+            "user_id": self.config.user_id,
+            "project_id": project_id or self.config.project_id,
+            "status": MemoryStatus.ACTIVE.value,
+        }
+        if scope is not None:
+            filters["scope"] = scope
+        hits = self._vector_index.search(vector, filters, top_k)
+        records = self._sqlite.list_records([str(hit["memory_id"]) for hit in hits])
+        record_by_id = {
+            record.memory_id: record
+            for record in records
+            if record.status == MemoryStatus.ACTIVE
+        }
+        results: list[MemorySearchResult] = []
+        for hit in hits:
+            record = record_by_id.get(str(hit["memory_id"]))
+            if record is None:
+                continue
+            results.append(
+                MemorySearchResult(
+                    memory_id=record.memory_id,
+                    content=record.content,
+                    kind=record.kind,
+                    scope=record.scope,
+                    score=combined_score(float(hit["score"]), record),
+                    source=None if include_sources else None,
+                    metadata=record.metadata,
+                )
+            )
+        return sorted(results, key=lambda result: result.score, reverse=True)
+
+    def forget(self, memory_id: str, *, reason: str = "") -> bool:
+        if self._sqlite is None:
+            return False
+        changed = self._sqlite.mark_deleted(memory_id)
+        if changed:
+            self._vector_index.delete_memory(memory_id)
+            self._sqlite.append_audit(
+                DEFAULT_ACTOR,
+                ACTION_MEMORY_FORGOTTEN,
+                memory_id,
+                {"reason": reason},
+            )
+        return changed
 
     def _enqueue_history_candidates(self, value: object) -> None:
         if self._sqlite is None or not isinstance(value, list):
