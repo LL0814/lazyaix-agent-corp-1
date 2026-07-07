@@ -7,7 +7,7 @@ def test_model_reads_dotenv_without_python_dotenv(monkeypatch, tmp_path):
     monkeypatch.delenv("MODEL", raising=False)
     monkeypatch.delenv("KIMI_API_KEY", raising=False)
     (tmp_path / ".env").write_text(
-        "MODEL=kimi:kimi-for-coding\n"
+        "MODEL=kimi:kimi-k2.7-code-highspeed\n"
         "KIMI_API_KEY=local-kimi-key\n",
         encoding="utf-8",
     )
@@ -15,7 +15,7 @@ def test_model_reads_dotenv_without_python_dotenv(monkeypatch, tmp_path):
     model = Model()
 
     assert model.provider_name == "kimi"
-    assert model.model_name == "kimi-for-coding"
+    assert model.model_name == "kimi-k2.7-code-highspeed"
     assert model.api_key == "local-kimi-key"
 
 
