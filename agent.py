@@ -342,6 +342,21 @@ class Agent:
             timeout_seconds = float(
                 self.config.get("WORKFLOW_TIMEOUT_SECONDS", "300")
             )
+            wait_mode = self.config.get("WORKFLOW_WAIT_MODE", "future").lower()
+            if wait_mode == "poll":
+                interval_seconds = float(
+                    self.config.get("WORKFLOW_POLL_INTERVAL_SECONDS", "0.5")
+                )
+                final_workflow = await self._poll_workflow_result(
+                    state_store,
+                    workflow.workflow_id,
+                    timeout_seconds=timeout_seconds,
+                    interval_seconds=interval_seconds,
+                )
+                if final_workflow is None:
+                    return "[Workflow timeout] did not complete within timeout"
+                return self._finalize_workflow(final_workflow, user_input)
+
             try:
                 await asyncio.wait_for(future, timeout=timeout_seconds)
             except asyncio.TimeoutError:
@@ -352,6 +367,29 @@ class Agent:
             if publisher is not None:
                 await publisher.stop()
             await event_bus.stop()
+
+    async def _poll_workflow_result(
+        self,
+        state_store,
+        workflow_id: str,
+        *,
+        timeout_seconds: float,
+        interval_seconds: float,
+    ) -> Workflow | None:
+        """Poll the state store until the workflow reaches a terminal state."""
+        deadline = asyncio.get_event_loop().time() + timeout_seconds
+        while asyncio.get_event_loop().time() < deadline:
+            workflow = await state_store.get_workflow(workflow_id)
+            if workflow is None:
+                return None
+            if workflow.status in {
+                WorkflowStatus.COMPLETED,
+                WorkflowStatus.FAILED,
+                WorkflowStatus.CANCELLED,
+            }:
+                return workflow
+            await asyncio.sleep(interval_seconds)
+        return None
 
     def _parse_plan_v2(self, raw: str) -> dict:
         """Parse LLM output; on failure fall back to direct response."""
