@@ -1,0 +1,4 @@
+interface:
+  display_name: "Building Enterprise Memory"
+  short_description: "Stage-gated enterprise agent memory delivery"
+  default_prompt: "Use $building-enterprise-memory to design or implement an enterprise agent memory layer with TDD, staged reports, and human verification."
