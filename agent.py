@@ -166,6 +166,25 @@ class Agent:
             return PostgresStateStore(pool), pool
         return InMemoryStateStore(), None
 
+    def _event_bus_backend(self) -> str:
+        return self.config.get("EVENT_BUS_BACKEND", "memory").lower()
+
+    async def _create_event_bus(self):
+        backend = self._event_bus_backend()
+        if backend == "kafka":
+            from events.kafka_event_bus import KafkaEventBus
+            return KafkaEventBus(
+                bootstrap_servers=self.config.get(
+                    "KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"
+                ),
+                client_id=self.config.get("KAFKA_CLIENT_ID", "agent-team"),
+                consumer_group=self.config.get(
+                    "KAFKA_CONSUMER_GROUP", "agent-team"
+                ),
+                topic_prefix=self.config.get("KAFKA_TOPIC_PREFIX", ""),
+            )
+        return InMemoryEventBus()
+
     def _build_tasks_from_plan(self, tasks_data: list[dict]) -> dict[str, Task]:
         """Convert LLM task plan into Task objects."""
         tasks: dict[str, Task] = {}
@@ -246,9 +265,8 @@ class Agent:
     async def _process_turn_event_driven(self, user_input: str) -> str:
         """Run the turn using event-driven task scheduling."""
         from db.outbox_repository import PostgresOutboxRepository
-        from events.outbox import InMemoryOutboxStore
 
-        event_bus = InMemoryEventBus()
+        event_bus = await self._create_event_bus()
         state_store, pool = await self._create_state_store()
         outbox = PostgresOutboxRepository(pool) if pool is not None else None
         max_retries = int(self.config.get("MAX_RETRIES", "2"))
