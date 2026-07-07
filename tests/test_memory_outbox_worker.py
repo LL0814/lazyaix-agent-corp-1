@@ -49,6 +49,16 @@ class StaticExtractor:
         return self.classification
 
 
+class StaticBatchExtractor:
+    def __init__(self, classifications: list[MemoryClassification]):
+        self.classifications = classifications
+        self.seen_texts = []
+
+    def extract_many(self, text: str) -> list[MemoryClassification]:
+        self.seen_texts.append(text)
+        return self.classifications
+
+
 def make_memory(tmp_path: Path, *, vector_index=None, candidate_extractor=None) -> Memory:
     return Memory(
         config={"MEMORY_DB_PATH": str(tmp_path / "memory.sqlite3")},
@@ -164,6 +174,87 @@ def test_process_outbox_stores_extractor_content_instead_of_raw_turn(tmp_path: P
     assert record.confidence == 0.91
     assert record.importance == 0.82
     assert row["payload"]["worker_result"]["content"] == "用户偏好入住安静的酒店。"
+
+
+def test_process_outbox_remembers_multiple_items_with_time_metadata(tmp_path: Path):
+    extractor = StaticBatchExtractor(
+        [
+            MemoryClassification(
+                should_remember=True,
+                kind=MemoryKind.SEMANTIC,
+                content="用户偏好在周三上午处理预算复盘。",
+                confidence=0.92,
+                importance=0.73,
+                reason="稳定的时间偏好",
+            ),
+            MemoryClassification(
+                should_remember=True,
+                kind=MemoryKind.EPISODIC,
+                content="用户在 2026-07-07 提到上次预算复盘遗漏了供应商尾款。",
+                confidence=0.89,
+                importance=0.68,
+                reason="一次性历史事件",
+            ),
+            MemoryClassification(
+                should_remember=True,
+                kind=MemoryKind.PROCEDURAL,
+                content="预算复盘时应先检查供应商尾款。",
+                confidence=0.9,
+                importance=0.86,
+                reason="后续流程要求",
+            ),
+            MemoryClassification(
+                should_remember=True,
+                kind=MemoryKind.SUMMARY,
+                content="用户关注预算复盘中的供应商尾款，并偏好周三上午处理。",
+                confidence=0.85,
+                importance=0.8,
+                reason="压缩摘要",
+            ),
+        ]
+    )
+    memory = make_memory(tmp_path, candidate_extractor=extractor)
+    memory.store(
+        "history",
+        [
+            {
+                "input": "我周三上午比较适合看预算复盘。上次漏了供应商尾款，以后复盘先帮我查这个。",
+                "response": "我会在后续预算复盘前优先检查供应商尾款。",
+            }
+        ],
+    )
+
+    result = memory.process_outbox(limit=10)
+
+    row = memory._sqlite.list_outbox()[0]
+    records = memory._sqlite.list_active_records()
+    records_by_kind = {record.kind: record for record in records}
+    worker_result = row["payload"]["worker_result"]
+
+    assert result["processed"] == 1
+    assert result["skipped"] == 0
+    assert result["failed"] == 0
+    assert len(result["remembered_ids"]) == 3
+    assert {record.kind for record in records} == {
+        MemoryKind.SEMANTIC,
+        MemoryKind.EPISODIC,
+        MemoryKind.PROCEDURAL,
+    }
+    assert memory.get_summary() == "用户关注预算复盘中的供应商尾款，并偏好周三上午处理。"
+    assert worker_result["processed_items"] == 4
+    assert [item["kind"] for item in worker_result["items"]] == [
+        "semantic",
+        "episodic",
+        "procedural",
+        "summary",
+    ]
+    assert worker_result["items"][3]["summary_updated"] is True
+    for record in records:
+        assert record.metadata["outbox_event_id"] == row["event_id"]
+        assert record.metadata["source_event_created_at"] == row["created_at"]
+        assert record.metadata["extracted_at"]
+        assert record.metadata["observed_at"] is None
+    assert records_by_kind[MemoryKind.PROCEDURAL].content == "预算复盘时应先检查供应商尾款。"
 
 
 def test_process_outbox_updates_summary_table_for_summary_candidate(tmp_path: Path):

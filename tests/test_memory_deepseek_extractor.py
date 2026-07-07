@@ -55,6 +55,73 @@ def test_deepseek_extractor_parses_json_and_uses_configured_model():
     assert client.completions.calls[0]["model"] == "deepseek-v4-pro"
 
 
+def test_deepseek_extractor_parses_multiple_items_from_batch_json():
+    client = FakeDeepSeekClient(
+        """
+        {
+          "items": [
+            {
+              "should_remember": true,
+              "kind": "semantic",
+              "content": "用户偏好在周三上午处理预算复盘。",
+              "confidence": 0.92,
+              "importance": 0.73,
+              "reason": "稳定的时间偏好"
+            },
+            {
+              "should_remember": true,
+              "kind": "episodic",
+              "content": "用户在 2026-07-07 提到上次预算复盘遗漏了供应商尾款。",
+              "observed_at": "2026-07-07",
+              "confidence": 0.89,
+              "importance": 0.68,
+              "reason": "明确的一次性历史事件"
+            },
+            {
+              "should_remember": true,
+              "kind": "procedural",
+              "content": "预算复盘时应先检查供应商尾款。",
+              "confidence": 0.9,
+              "importance": 0.86,
+              "reason": "用户表达了后续流程要求"
+            },
+            {
+              "should_remember": true,
+              "kind": "summary",
+              "content": "用户关注预算复盘中的供应商尾款，并偏好周三上午处理。",
+              "confidence": 0.85,
+              "importance": 0.8,
+              "reason": "对当前长期偏好的压缩摘要"
+            }
+          ]
+        }
+        """
+    )
+    extractor = DeepSeekMemoryExtractor(
+        api_key="ds-key",
+        model="deepseek-v4-pro",
+        client=client,
+    )
+
+    results = extractor.extract_many(
+        "我周三上午比较适合看预算复盘。上次漏了供应商尾款，以后复盘先帮我查这个。"
+    )
+
+    assert [result.kind for result in results] == [
+        MemoryKind.SEMANTIC,
+        MemoryKind.EPISODIC,
+        MemoryKind.PROCEDURAL,
+        MemoryKind.SUMMARY,
+    ]
+    assert [result.content for result in results] == [
+        "用户偏好在周三上午处理预算复盘。",
+        "用户在 2026-07-07 提到上次预算复盘遗漏了供应商尾款。",
+        "预算复盘时应先检查供应商尾款。",
+        "用户关注预算复盘中的供应商尾款，并偏好周三上午处理。",
+    ]
+    assert results[1].observed_at == "2026-07-07"
+
+
 def test_deepseek_extractor_strips_markdown_fence():
     client = FakeDeepSeekClient(
         """```json
