@@ -163,8 +163,8 @@ class Agent:
         if backend == "postgres":
             pool = await create_pool()
             from db.postgres_state_store import PostgresStateStore
-            return PostgresStateStore(pool)
-        return InMemoryStateStore()
+            return PostgresStateStore(pool), pool
+        return InMemoryStateStore(), None
 
     def _build_tasks_from_plan(self, tasks_data: list[dict]) -> dict[str, Task]:
         """Convert LLM task plan into Task objects."""
@@ -245,10 +245,16 @@ class Agent:
 
     async def _process_turn_event_driven(self, user_input: str) -> str:
         """Run the turn using event-driven task scheduling."""
+        from db.outbox_repository import PostgresOutboxRepository
+        from events.outbox import InMemoryOutboxStore
+
         event_bus = InMemoryEventBus()
-        state_store = await self._create_state_store()
+        state_store, pool = await self._create_state_store()
+        outbox = PostgresOutboxRepository(pool) if pool is not None else None
         max_retries = int(self.config.get("MAX_RETRIES", "2"))
-        coordinator = WorkflowCoordinator(event_bus, state_store, max_retries=max_retries)
+        coordinator = WorkflowCoordinator(
+            event_bus, state_store, max_retries=max_retries, outbox=outbox
+        )
         scheduler = Scheduler(
             event_bus,
             {

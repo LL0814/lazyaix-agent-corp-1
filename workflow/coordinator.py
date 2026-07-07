@@ -6,6 +6,7 @@ import asyncio
 import uuid
 
 from events.bus import EventBus
+from events.outbox import OutboxStore
 from events.schema import Event, EventType
 from workflow.graph import TaskGraph
 from workflow.state import TaskStatus, Workflow, WorkflowStatus
@@ -20,10 +21,12 @@ class WorkflowCoordinator:
         event_bus: EventBus,
         state_store: StateStore,
         max_retries: int = 2,
+        outbox: OutboxStore | None = None,
     ):
         self.event_bus = event_bus
         self.state_store = state_store
         self.max_retries = max_retries
+        self.outbox = outbox
         self._completions: dict[str, asyncio.Future] = {}
 
     def create_future(self, workflow_id: str) -> asyncio.Future:
@@ -124,23 +127,27 @@ class WorkflowCoordinator:
         if task.status not in (TaskStatus.READY, TaskStatus.RETRYING):
             return
         task.status = TaskStatus.DISPATCHED
-        await self.event_bus.publish(
-            Event(
-                event_id=str(uuid.uuid4()),
-                event_type=EventType.TASK_READY,
-                trace_id=workflow.trace_id,
-                workflow_id=workflow.workflow_id,
-                task_id=task.task_id,
-                source="coordinator",
-                target_capability=task.target_capability,
-                payload={
-                    "instructions": task.instructions,
-                    "input": task.input,
-                    "input_refs": task.input_refs,
-                },
-                metadata={"retry_count": task.retry_count},
-            )
+        event = Event(
+            event_id=str(uuid.uuid4()),
+            event_type=EventType.TASK_READY,
+            trace_id=workflow.trace_id,
+            workflow_id=workflow.workflow_id,
+            task_id=task.task_id,
+            source="coordinator",
+            target_capability=task.target_capability,
+            payload={
+                "instructions": task.instructions,
+                "input": task.input,
+                "input_refs": task.input_refs,
+            },
+            metadata={"retry_count": task.retry_count},
         )
+        if self.outbox is not None:
+            await self.outbox.enqueue(
+                event, topic="task.ready", key=event.task_id
+            )
+        else:
+            await self.event_bus.publish(event)
 
     async def _check_completion(self, workflow: Workflow) -> None:
         graph = TaskGraph(workflow)
