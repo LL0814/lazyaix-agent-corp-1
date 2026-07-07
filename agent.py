@@ -185,6 +185,20 @@ class Agent:
             )
         return InMemoryEventBus()
 
+    def _create_idempotency_store(self):
+        if self.config.get("REDIS_ENABLED", "false").lower() == "true":
+            from redis.asyncio import Redis
+            from db.redis_idempotency import RedisIdempotencyStore
+
+            redis = Redis.from_url(
+                self.config.get("REDIS_URL", "redis://localhost:6379"),
+                decode_responses=True,
+            )
+            return RedisIdempotencyStore(redis)
+        from scheduler import InMemoryIdempotencyStore
+
+        return InMemoryIdempotencyStore()
+
     def _build_tasks_from_plan(self, tasks_data: list[dict]) -> dict[str, Task]:
         """Convert LLM task plan into Task objects."""
         tasks: dict[str, Task] = {}
@@ -274,12 +288,17 @@ class Agent:
         coordinator = WorkflowCoordinator(
             event_bus, state_store, max_retries=max_retries, outbox=outbox
         )
+        idempotency_store = self._create_idempotency_store()
         scheduler = Scheduler(
             event_bus,
             {
                 "researcher": ResearcherHandler(self.model, event_bus),
                 "writer": WriterHandler(self.model, event_bus),
             },
+            idempotency_store=idempotency_store,
+            dispatch_ttl_seconds=float(
+                self.config.get("SCHEDULER_DISPATCH_TTL_SECONDS", "3600")
+            ),
         )
 
         event_bus.subscribe(EventType.TASK_READY, scheduler.handle_task_ready)

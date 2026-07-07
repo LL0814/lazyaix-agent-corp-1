@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 
 from events.bus import EventBus
 from events.schema import Event, EventType
@@ -15,13 +16,50 @@ logger = logging.getLogger(__name__)
 Handler = Callable[[Event], Awaitable[None]]
 
 
+class IdempotencyStore(Protocol):
+    """Abstraction for dispatch deduplication across Scheduler instances."""
+
+    async def acquire(self, key: str, ttl_seconds: int) -> bool:
+        """Try to acquire the dispatch lock for *key*.
+
+        Returns ``True`` if this caller was the first to acquire the lock
+        within the TTL window, ``False`` otherwise.
+        """
+        ...
+
+
+class InMemoryIdempotencyStore:
+    """Process-local idempotency store used for tests and single-process deployments."""
+
+    def __init__(self):
+        self._keys: dict[str, float] = {}
+
+    async def acquire(self, key: str, ttl_seconds: int) -> bool:
+        now = time.monotonic()
+        # prune expired entries opportunistically
+        expired = [k for k, expires_at in self._keys.items() if expires_at <= now]
+        for k in expired:
+            self._keys.pop(k, None)
+        if key in self._keys:
+            return False
+        self._keys[key] = now + ttl_seconds
+        return True
+
+
 class Scheduler:
     """Routes ready tasks to handlers based on target_capability."""
 
-    def __init__(self, event_bus: EventBus, handlers: dict[str, Handler]):
+    def __init__(
+        self,
+        event_bus: EventBus,
+        handlers: dict[str, Handler],
+        idempotency_store: IdempotencyStore | None = None,
+        dispatch_ttl_seconds: float = 3600.0,
+    ):
         self.event_bus = event_bus
         self.handlers = handlers
-        self._dispatched: set[str] = set()
+        self._idempotency = idempotency_store or InMemoryIdempotencyStore()
+        self._dispatch_ttl_seconds = dispatch_ttl_seconds
         self._tasks: set[asyncio.Task] = set()
 
     def _spawn_handler(self, handler: Handler, event: Event) -> None:
@@ -48,10 +86,12 @@ class Scheduler:
 
         retry_count = event.metadata.get("retry_count", 0)
         dispatch_key = f"{event.workflow_id}:{task_id}:{retry_count}"
-        if dispatch_key in self._dispatched:
+        acquired = await self._idempotency.acquire(
+            dispatch_key, int(self._dispatch_ttl_seconds)
+        )
+        if not acquired:
             logger.debug("Task %s already dispatched, ignoring", task_id)
             return
-        self._dispatched.add(dispatch_key)
 
         capability = event.target_capability
         handler = self.handlers.get(capability)
