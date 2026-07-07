@@ -100,22 +100,31 @@ class PostgresStateStore:
                 )
                 for task in workflow.tasks.values():
                     await self._upsert_task(conn, task, workflow.workflow_id)
+
+                # Delete tasks that are no longer part of this workflow.
+                task_ids = list(workflow.tasks.keys())
+                if task_ids:
+                    await conn.execute(
+                        """
+                        DELETE FROM tasks
+                        WHERE workflow_id = $1
+                          AND task_id NOT IN (SELECT unnest($2::uuid[]))
+                        """,
+                        workflow.workflow_id,
+                        task_ids,
+                    )
+                else:
+                    await conn.execute(
+                        "DELETE FROM tasks WHERE workflow_id = $1",
+                        workflow.workflow_id,
+                    )
+
                 await conn.execute(
                     "DELETE FROM task_dependencies WHERE workflow_id = $1",
                     workflow.workflow_id,
                 )
                 for task in workflow.tasks.values():
-                    for dep in task.dependencies:
-                        await conn.execute(
-                            """
-                            INSERT INTO task_dependencies (workflow_id, task_id, depends_on_task_id)
-                            VALUES ($1, $2, $3)
-                            ON CONFLICT DO NOTHING
-                            """,
-                            workflow.workflow_id,
-                            task.task_id,
-                            dep,
-                        )
+                    await self._save_task_dependencies(conn, task, workflow.workflow_id)
 
     async def _upsert_task(self, conn: asyncpg.Connection, task: Task, workflow_id: str) -> None:
         row = _task_to_row(task, workflow_id)
@@ -151,6 +160,26 @@ class PostgresStateStore:
                 "result", "error_info", "retry_count", "max_retries", "priority", "version"
             ]]
         )
+
+    async def _save_task_dependencies(
+        self, conn: asyncpg.Connection, task: Task, workflow_id: str
+    ) -> None:
+        await conn.execute(
+            "DELETE FROM task_dependencies WHERE workflow_id = $1 AND task_id = $2",
+            workflow_id,
+            task.task_id,
+        )
+        for dep in task.dependencies:
+            await conn.execute(
+                """
+                INSERT INTO task_dependencies (workflow_id, task_id, depends_on_task_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT DO NOTHING
+                """,
+                workflow_id,
+                task.task_id,
+                dep,
+            )
 
     async def get_workflow(self, workflow_id: str) -> Workflow | None:
         async with self._pool.acquire() as conn:
@@ -193,16 +222,26 @@ class PostgresStateStore:
 
     async def save_task(self, task: Task) -> None:
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT workflow_id FROM tasks WHERE task_id = $1", task.task_id)
-            workflow_id = row["workflow_id"] if row else None
-            if workflow_id is None:
-                raise RuntimeError(f"Cannot save orphan task {task.task_id} without workflow_id")
-            await self._upsert_task(conn, task, workflow_id)
+            async with conn.transaction():
+                row = await conn.fetchrow("SELECT workflow_id FROM tasks WHERE task_id = $1", task.task_id)
+                workflow_id = row["workflow_id"] if row else None
+                if workflow_id is None:
+                    raise RuntimeError(f"Cannot save orphan task {task.task_id} without workflow_id")
+                await self._upsert_task(conn, task, workflow_id)
+                await self._save_task_dependencies(conn, task, workflow_id)
 
     async def get_task(self, task_id: str) -> Task | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("SELECT * FROM tasks WHERE task_id = $1", task_id)
-            return _row_to_task(row) if row else None
+            if row is None:
+                return None
+            task = _row_to_task(row)
+            dep_rows = await conn.fetch(
+                "SELECT depends_on_task_id FROM task_dependencies WHERE task_id = $1",
+                task_id,
+            )
+            task.dependencies = [str(r["depends_on_task_id"]) for r in dep_rows]
+            return task
 
     async def update_task_status(
         self,
