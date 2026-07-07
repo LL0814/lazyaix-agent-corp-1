@@ -458,6 +458,55 @@ class SQLiteMemoryStore:
             ).fetchall()
         return [self._record_from_row(row) for row in rows]
 
+    def search_records_by_terms(
+        self,
+        terms: list[str],
+        *,
+        tenant_id: str,
+        user_id: str,
+        project_id: str,
+        scope: str | None = None,
+        limit: int = 20,
+    ) -> list[MemoryRecord]:
+        if not terms:
+            return []
+        query = """
+            SELECT *
+            FROM memory_records
+            WHERE status = ?
+              AND tenant_id = ?
+              AND user_id = ?
+              AND project_id = ?
+        """
+        params: list[Any] = [
+            MemoryStatus.ACTIVE.value,
+            tenant_id,
+            user_id,
+            project_id,
+        ]
+        if scope is not None:
+            query += " AND scope = ?"
+            params.append(scope)
+        query += " ORDER BY created_at DESC"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        scored: list[tuple[int, MemoryRecord]] = []
+        for row in rows:
+            record = self._record_from_row(row)
+            score = sum(1 for term in terms if term in record.content)
+            if score > 0:
+                scored.append((score, record))
+        scored.sort(
+            key=lambda item: (
+                item[0],
+                item[1].importance,
+                item[1].created_at,
+            ),
+            reverse=True,
+        )
+        return [record for _, record in scored[:limit]]
+
     def _fetch_record_row(self, memory_id: str) -> sqlite3.Row | None:
         with self._connect() as conn:
             return conn.execute(

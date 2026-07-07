@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from typing import Any
 
 from memory.audit import (
@@ -169,7 +170,7 @@ class Memory:
         record_by_id = {
             record.memory_id: record
             for record in records
-            if record.status == MemoryStatus.ACTIVE
+            if record.status == MemoryStatus.ACTIVE and not self._is_search_noise(record)
         }
         results: list[MemorySearchResult] = []
         for hit in hits:
@@ -187,6 +188,29 @@ class Memory:
                     metadata=record.metadata,
                 )
             )
+        seen_ids = {result.memory_id for result in results}
+        for record in self._sqlite.search_records_by_terms(
+            self._query_terms(query),
+            tenant_id=self.config.tenant_id,
+            user_id=self.config.user_id,
+            project_id=project_id or self.config.project_id,
+            scope=scope,
+            limit=top_k,
+        ):
+            if record.memory_id in seen_ids or self._is_search_noise(record):
+                continue
+            results.append(
+                MemorySearchResult(
+                    memory_id=record.memory_id,
+                    content=record.content,
+                    kind=record.kind,
+                    scope=record.scope,
+                    score=combined_score(0.7, record),
+                    source=None,
+                    metadata=record.metadata,
+                )
+            )
+            seen_ids.add(record.memory_id)
         return sorted(results, key=lambda result: result.score, reverse=True)
 
     def forget(self, memory_id: str, *, reason: str = "") -> bool:
@@ -274,6 +298,8 @@ class Memory:
                 "memory.semantic_candidate.created",
                 {
                     "text": text,
+                    "input": turn.get("input", ""),
+                    "response": turn.get("response", ""),
                     "key": "history",
                     "tenant_id": self.config.tenant_id,
                     "user_id": self.config.user_id,
@@ -292,3 +318,51 @@ class Memory:
                         "dedupe_key": dedupe_key,
                     },
                 )
+
+    @staticmethod
+    def _query_terms(query: str) -> list[str]:
+        text = query.strip()
+        replacements = (
+            "长期记忆",
+            "分别",
+            "有哪些",
+            "有什么",
+            "什么",
+            "偏好",
+            "流程",
+            "习惯",
+            "基于",
+            "方面",
+            "说说",
+            "我的",
+            "我在",
+            "你",
+            "和",
+        )
+        for word in replacements:
+            text = text.replace(word, " ")
+        raw_terms = re.findall(r"[\u4e00-\u9fffA-Za-z0-9_+-]{2,}", text)
+        expansions = {
+            "会议": ["会议", "周会", "排会"],
+            "住宿": ["住宿", "酒店"],
+            "合同": ["合同", "续费", "自动扣款"],
+            "招聘": ["招聘", "候选人"],
+        }
+        terms: list[str] = []
+        for term in raw_terms:
+            terms.extend(expansions.get(term, [term]))
+        deduped: list[str] = []
+        for term in terms:
+            if term not in deduped:
+                deduped.append(term)
+        return deduped
+
+    @staticmethod
+    def _is_search_noise(record: MemoryRecord) -> bool:
+        content = record.content.strip()
+        return content.startswith("Q:") and (
+            "长期记忆" in content
+            or "还记得" in content
+            or "API Key 配置异常" in content
+            or "模型调用失败" in content
+        )

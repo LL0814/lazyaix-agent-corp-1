@@ -153,6 +153,7 @@ class Agent:
             history = self.memory.retrieve("history") or []
             memory_text = "\n".join(
                 f"Q: {h['input']}\nA: {h['response']}" for h in history[-3:]
+                if not self._is_memory_recall_meta_input(str(h.get("input", "")))
             )
             if memory_text:
                 parts.append(memory_text)
@@ -187,7 +188,7 @@ class Agent:
             counts = self.memory.debug_counts()
             if getattr(counts, "records", 0) <= 0:
                 return ""
-            top_k = int(self.config.get("MEMORY_PROMPT_TOP_K", "5"))
+            top_k = int(self.config.get("MEMORY_PROMPT_TOP_K", "12"))
             results = self.memory.search(user_input, top_k=top_k)
         except Exception:
             return ""
@@ -195,6 +196,21 @@ class Agent:
             return ""
         lines = [f"- [{result.kind.value}] {result.content}" for result in results]
         return "Long-term memories:\n" + "\n".join(lines)
+
+    @staticmethod
+    def _is_memory_recall_meta_input(user_input):
+        patterns = (
+            "基于长期记忆",
+            "根据长期记忆",
+            "根据你的长期记忆",
+            "长期记忆中",
+            "你还记得",
+            "你记得",
+            "还记得我",
+        )
+        return any(pattern in user_input for pattern in patterns) and (
+            "请记住" not in user_input and "记为" not in user_input
+        )
 
     def _remember(self, user_input, response):
         """Store the turn in memory when ENABLE_MEMORY is true."""

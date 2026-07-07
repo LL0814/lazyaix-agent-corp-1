@@ -33,6 +33,15 @@ class FakeIndex:
         self.deleted.add(memory_id)
 
 
+class IndexThatMissesContract(FakeIndex):
+    def search(self, vector, filters, top_k):
+        return [
+            result
+            for result in super().search(vector, filters, top_k=100)
+            if "合同" not in self.points[result["memory_id"]]["record"].content
+        ][:top_k]
+
+
 def make_memory(tmp_path: Path):
     return Memory(
         config={"MEMORY_DB_PATH": str(tmp_path / "memory.sqlite3")},
@@ -69,6 +78,43 @@ def test_search_filters_project_by_default(tmp_path: Path):
     results = memory.search("项目向量库", top_k=10)
 
     assert [result.content for result in results] == ["当前项目偏好 Qdrant"]
+
+
+def test_search_adds_sqlite_keyword_fallback_when_vector_misses_relevant_memory(
+    tmp_path: Path,
+):
+    memory = Memory(
+        config={"MEMORY_DB_PATH": str(tmp_path / "memory.sqlite3")},
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_index=IndexThatMissesContract(),
+    )
+    memory.remember("合同审核前应先检查续费条款和自动扣款。", kind="procedural")
+    memory.remember("路演时用户偏好先讲风险边界，再讲收益空间。", kind="semantic")
+
+    results = memory.search("合同和路演分别有什么偏好？", top_k=2)
+
+    assert "合同审核前应先检查续费条款和自动扣款。" in [
+        result.content for result in results
+    ]
+    assert "路演时用户偏好先讲风险边界，再讲收益空间。" in [
+        result.content for result in results
+    ]
+
+
+def test_search_filters_memory_recall_meta_answers_from_results(tmp_path: Path):
+    memory = make_memory(tmp_path)
+    memory.remember(
+        "Q: 你基于长期记忆，分别说说我在合同方面有哪些偏好？\n"
+        "A: 根据你目前的长期记忆，合同暂无相关长期记忆。",
+        kind="semantic",
+    )
+    memory.remember("合同审核前应先检查续费条款和自动扣款。", kind="procedural")
+
+    results = memory.search("合同方面有哪些偏好？", top_k=10)
+
+    assert [result.content for result in results] == [
+        "合同审核前应先检查续费条款和自动扣款。"
+    ]
 
 
 def test_forget_hides_memory_from_search(tmp_path: Path):

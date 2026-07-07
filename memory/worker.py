@@ -37,7 +37,7 @@ class MemoryOutboxWorker:
                 self._mark_skipped(event_id, payload, "不支持的 outbox 事件类型", result)
                 return
 
-            text = str(payload.get("text", "")).strip()
+            text = self._candidate_text(payload)
             if not text:
                 self._mark_skipped(event_id, payload, "候选文本为空", result)
                 return
@@ -145,6 +145,13 @@ class MemoryOutboxWorker:
         if callable(extract_many):
             return list(extract_many(text))
         return [self.memory._candidate_extractor.extract(text)]
+
+    @staticmethod
+    def _candidate_text(payload: dict[str, Any]) -> str:
+        user_input = str(payload.get("input", "")).strip()
+        if user_input:
+            return user_input
+        return str(payload.get("text", "")).strip()
 
     def _process_classification(
         self,

@@ -118,3 +118,57 @@ def test_agent_prompt_injects_summary_memory(tmp_path: Path):
 
     assert "Memory summary:" in prompt
     assert "用户正在验证 Ollama bge-m3 的企业级记忆系统。" in prompt
+
+
+def test_agent_prompt_default_retrieves_enough_memories_for_multi_domain_query(
+    tmp_path: Path,
+):
+    context = Context()
+    memory = Memory(
+        config={"MEMORY_DB_PATH": str(tmp_path / "memory.sqlite3")},
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_index=FakeIndex(),
+    )
+    contents = [
+        "合同审核前应先检查续费条款和自动扣款。",
+        "路演时用户偏好先讲风险边界，再讲收益空间。",
+        "项目周会应尽量避开每天 11 点半到 13 点。",
+        "供应商评估时用户更看重售后响应速度。",
+        "招聘候选人整理时应优先看稳定性和跨团队沟通能力。",
+        "住宿推荐应优先考虑安静且靠近地铁的酒店。",
+    ]
+    for content in contents:
+        memory.remember(content)
+    agent = Agent(context=context, memory=memory)
+
+    prompt = agent._build_prompt(
+        "你基于长期记忆，分别说说我在合同、路演、会议、供应商、招聘、住宿方面有哪些偏好？"
+    )
+
+    for content in contents:
+        assert content in prompt
+
+
+def test_agent_prompt_skips_memory_recall_meta_history(tmp_path: Path):
+    context = Context()
+    memory = Memory(
+        config={"MEMORY_DB_PATH": str(tmp_path / "memory.sqlite3")},
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_index=FakeIndex(),
+    )
+    memory.remember("合同审核前应先检查续费条款和自动扣款。", kind="procedural")
+    memory.store(
+        "history",
+        [
+            {
+                "input": "你基于长期记忆，分别说说我在合同方面有哪些偏好？",
+                "response": "合同暂无相关长期记忆。",
+            }
+        ],
+    )
+    agent = Agent(context=context, memory=memory)
+
+    prompt = agent._build_prompt("你基于长期记忆，说说合同方面有哪些偏好？")
+
+    assert "合同审核前应先检查续费条款和自动扣款。" in prompt
+    assert "合同暂无相关长期记忆。" not in prompt

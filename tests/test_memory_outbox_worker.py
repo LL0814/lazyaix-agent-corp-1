@@ -2,6 +2,7 @@ from pathlib import Path
 
 from memory import Memory
 from memory.embeddings import FakeEmbeddingProvider
+from memory.extractors import RuleBasedMemoryExtractor
 from memory.models import MemoryClassification, MemoryKind
 
 
@@ -111,6 +112,28 @@ def test_process_outbox_skips_low_value_candidate(tmp_path: Path):
     assert records == []
 
 
+def test_process_outbox_skips_long_term_memory_meta_question(tmp_path: Path):
+    memory = make_memory(tmp_path, candidate_extractor=RuleBasedMemoryExtractor())
+    memory.store(
+        "history",
+        [
+            {
+                "input": "你基于长期记忆，分别说说我在合同、路演、会议方面有哪些偏好？",
+                "response": "根据长期记忆，目前合同暂无相关记录。",
+            }
+        ],
+    )
+
+    result = memory.process_outbox(limit=10)
+
+    row = memory._sqlite.list_outbox()[0]
+
+    assert result["processed"] == 0
+    assert result["skipped"] == 1
+    assert row["status"] == "skipped"
+    assert memory._sqlite.list_active_records() == []
+
+
 def test_process_outbox_marks_failed_when_remember_fails(tmp_path: Path):
     memory = make_memory(tmp_path, vector_index=FailingIndex())
     memory.store("history", [{"input": "用户喜欢安静酒店", "response": "已记录"}])
@@ -169,11 +192,39 @@ def test_process_outbox_stores_extractor_content_instead_of_raw_turn(tmp_path: P
     record = memory._sqlite.list_active_records()[0]
 
     assert result["processed"] == 1
-    assert extractor.seen_texts == ["Q: 我喜欢安静一点的酒店\nA: 已记录"]
+    assert extractor.seen_texts == ["我喜欢安静一点的酒店"]
     assert record.content == "用户偏好入住安静的酒店。"
     assert record.confidence == 0.91
     assert record.importance == 0.82
     assert row["payload"]["worker_result"]["content"] == "用户偏好入住安静的酒店。"
+
+
+def test_process_outbox_extracts_from_user_input_without_assistant_response(tmp_path: Path):
+    extractor = StaticExtractor(
+        MemoryClassification(
+            should_remember=True,
+            kind=MemoryKind.PROCEDURAL,
+            content="合同审核前应先检查续费条款和自动扣款。",
+            confidence=0.91,
+            importance=0.84,
+            reason="流程偏好",
+        )
+    )
+    memory = make_memory(tmp_path, candidate_extractor=extractor)
+    memory.store(
+        "history",
+        [
+            {
+                "input": "以后如果让我看合同，先帮我确认续费和自动扣款。",
+                "response": "已记住这条合同审核偏好。",
+            }
+        ],
+    )
+
+    result = memory.process_outbox(limit=10)
+
+    assert result["processed"] == 1
+    assert extractor.seen_texts == ["以后如果让我看合同，先帮我确认续费和自动扣款。"]
 
 
 def test_process_outbox_remembers_multiple_items_with_time_metadata(tmp_path: Path):

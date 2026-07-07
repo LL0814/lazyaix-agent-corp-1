@@ -25,6 +25,21 @@ PREFERENCE_KEYWORDS = (
     "正在构建",
     "项目",
 )
+MEMORY_RECALL_META_PATTERNS = (
+    "基于长期记忆",
+    "根据长期记忆",
+    "根据你的长期记忆",
+    "你还记得",
+    "你记得",
+    "还记得我",
+    "长期记忆中",
+)
+
+
+def _is_memory_recall_meta_question(text: str) -> bool:
+    return any(pattern in text for pattern in MEMORY_RECALL_META_PATTERNS) and (
+        "请记住" not in text and "记为" not in text
+    )
 
 
 def classify_memory_candidate(text: str) -> MemoryClassification:
@@ -36,6 +51,14 @@ def classify_memory_candidate(text: str) -> MemoryClassification:
             confidence=0.9,
             importance=0.1,
             reason="内容过短，通常不是稳定记忆",
+        )
+    if _is_memory_recall_meta_question(stripped):
+        return MemoryClassification(
+            should_remember=False,
+            kind=MemoryKind.EPISODIC,
+            confidence=0.95,
+            importance=0.1,
+            reason="这是询问长期记忆的元问题，不应写入长期记忆",
         )
 
     if any(keyword in stripped for keyword in PROCEDURAL_KEYWORDS):
