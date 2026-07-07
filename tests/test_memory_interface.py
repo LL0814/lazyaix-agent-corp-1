@@ -1,7 +1,7 @@
 def test_memory_imports_real_class():
     from memory import Memory
 
-    memory = Memory()
+    memory = Memory(config={"MEMORY_BACKEND": "memory"})
 
     assert hasattr(memory, "store")
     assert hasattr(memory, "retrieve")
@@ -25,6 +25,7 @@ def test_default_config_values():
     assert config.enable_memory is True
     assert config.use_memories is True
     assert config.generate_memories is True
+    assert config.backend == "sqlite"
     assert config.tenant_id == "local"
     assert config.user_id == "default"
     assert config.project_id == "lazyaiX-agent-corp-1"
