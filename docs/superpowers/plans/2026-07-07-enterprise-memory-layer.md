@@ -22,6 +22,7 @@
 - 每个阶段必须先写测试，再实现，最后写中文阶段报告。
 - 每个阶段必须单独 commit。
 - 每个阶段完成后停止，等待用户确认后才能进入下一阶段。
+- 本仓库依赖由 `uv` 管理，测试命令使用 `uv run pytest`，Python 人工验证命令使用 `uv run python`。
 
 ---
 
@@ -424,7 +425,7 @@ Create: `docs/superpowers/reports/2026-07-07-memory-phase-01.md`
 - 人工验证命令：
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory()
 m.store("hello", {"world": 1})
@@ -737,14 +738,14 @@ Create: `docs/superpowers/reports/2026-07-07-memory-phase-02.md`
 报告必须包含人工验证命令：
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory(config={"MEMORY_DB_PATH": ".memory/manual.sqlite3"})
 m.store("history", [{"input": "我想去成都", "response": "好的"}])
 print(m.retrieve("history"))
 PY
 
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory(config={"MEMORY_DB_PATH": ".memory/manual.sqlite3"})
 print(m.retrieve("history"))
@@ -1089,7 +1090,7 @@ Create: `docs/superpowers/reports/2026-07-07-memory-phase-03.md`
 人工验证命令：
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory(config={"MEMORY_DB_PATH": ".memory/manual.sqlite3"})
 m.store("history", [{"input": "喜欢安静酒店", "response": "已记录"}])
@@ -1344,7 +1345,7 @@ Create: `docs/superpowers/reports/2026-07-07-memory-phase-04.md`
 人工验证命令：
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory.redaction import redact_text
 print(redact_text("token=sk-abcdefghijklmnopqrstuvwxyz123456").text)
 PY
@@ -1540,7 +1541,7 @@ Expected:
 此命令不作为 CI 必须项，因为会加载大模型：
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory.embeddings import BGEM3EmbeddingProvider
 p = BGEM3EmbeddingProvider(model_name="BAAI/bge-m3")
 v = p.embed("我喜欢安静的酒店")
@@ -2308,7 +2309,7 @@ Expected:
 Run:
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory()
 mid = m.remember("用户喜欢安静、交通方便的酒店", kind="semantic")
@@ -2633,7 +2634,7 @@ Expected:
 Run:
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory()
 m.update_summary("用户正在构建企业级本地记忆系统。")
@@ -2800,7 +2801,7 @@ quit
 验证读取命令：
 
 ```bash
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory()
 print(m.retrieve("history"))
@@ -2847,7 +2848,7 @@ Expected:
 ```bash
 git status --short
 pytest -v
-python3 - <<'PY'
+uv run python - <<'PY'
 from memory import Memory
 m = Memory()
 print(type(m).__name__)
