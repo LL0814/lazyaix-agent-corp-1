@@ -111,9 +111,9 @@ def test_supervisor_custom_max_retries_from_config(monkeypatch):
 
     original_init = WorkflowCoordinator.__init__
 
-    def spy_init(self, event_bus, max_retries=2):
+    def spy_init(self, event_bus, state_store, max_retries=2):
         captured["max_retries"] = max_retries
-        original_init(self, event_bus, max_retries)
+        original_init(self, event_bus, state_store, max_retries)
 
     monkeypatch.setattr(WorkflowCoordinator, "__init__", spy_init)
 

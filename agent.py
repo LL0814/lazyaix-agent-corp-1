@@ -26,6 +26,7 @@ from subagents.handlers import ResearcherHandler, WriterHandler
 from workflow.coordinator import WorkflowCoordinator
 from workflow.graph import TaskGraph, TaskGraphError
 from workflow.state import Task, TaskStatus, Workflow, WorkflowStatus
+from workflow.state_store import InMemoryStateStore
 
 # Optional dotenv support. If python-dotenv is installed, load .env.
 try:
@@ -233,8 +234,9 @@ class Agent:
     async def _process_turn_event_driven(self, user_input: str) -> str:
         """Run the turn using event-driven task scheduling."""
         event_bus = InMemoryEventBus()
+        state_store = InMemoryStateStore()
         max_retries = int(self.config.get("MAX_RETRIES", "2"))
-        coordinator = WorkflowCoordinator(event_bus, max_retries=max_retries)
+        coordinator = WorkflowCoordinator(event_bus, state_store, max_retries=max_retries)
         scheduler = Scheduler(
             event_bus,
             {

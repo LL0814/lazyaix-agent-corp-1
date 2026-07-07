@@ -44,6 +44,7 @@ class Task:
     result: Any = None
     error: dict | None = None
     retry_count: int = 0
+    version: int = 1
 
 
 @dataclass
@@ -55,3 +56,4 @@ class Workflow:
     status: WorkflowStatus = WorkflowStatus.CREATED
     final_result: str | None = None
     error: dict | None = None
+    version: int = 1

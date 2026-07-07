@@ -9,6 +9,7 @@ from events.bus import EventBus
 from events.schema import Event, EventType
 from workflow.graph import TaskGraph
 from workflow.state import TaskStatus, Workflow, WorkflowStatus
+from workflow.state_store import StateStore
 
 
 class WorkflowCoordinator:
@@ -17,15 +18,13 @@ class WorkflowCoordinator:
     def __init__(
         self,
         event_bus: EventBus,
+        state_store: StateStore,
         max_retries: int = 2,
     ):
         self.event_bus = event_bus
+        self.state_store = state_store
         self.max_retries = max_retries
-        self._workflows: dict[str, Workflow] = {}
         self._completions: dict[str, asyncio.Future] = {}
-
-    def register(self, workflow: Workflow) -> None:
-        self._workflows[workflow.workflow_id] = workflow
 
     def create_future(self, workflow_id: str) -> asyncio.Future:
         """Create a future that will be resolved when the identified workflow completes."""
@@ -38,19 +37,22 @@ class WorkflowCoordinator:
         self._completions[workflow_id] = future
 
     async def start_workflow(self, workflow: Workflow) -> None:
+        await self.state_store.save_workflow(workflow)
         graph = TaskGraph(workflow)
         graph.validate()
         workflow.status = WorkflowStatus.EXECUTING
-        self.register(workflow)
+        await self.state_store.update_workflow_status(
+            workflow.workflow_id, WorkflowStatus.EXECUTING, version=workflow.version
+        )
         await self._publish_ready_tasks(workflow)
 
     async def handle_task_completed(self, event: Event) -> None:
-        workflow = self._workflows.get(event.workflow_id)
-        if workflow is None or event.task_id is None:
+        loaded = await self.state_store.load_task_graph(event.workflow_id)
+        if loaded is None or event.task_id is None:
             return
+        workflow, graph = loaded
         if workflow.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED):
             return  # ignore events for already-terminal workflows
-        graph = TaskGraph(workflow)
 
         task = workflow.tasks.get(event.task_id)
         if task is None:
@@ -63,12 +65,12 @@ class WorkflowCoordinator:
         await self._check_completion(workflow)
 
     async def handle_task_failed(self, event: Event) -> None:
-        workflow = self._workflows.get(event.workflow_id)
-        if workflow is None or event.task_id is None:
+        loaded = await self.state_store.load_task_graph(event.workflow_id)
+        if loaded is None or event.task_id is None:
             return
+        workflow, graph = loaded
         if workflow.status in (WorkflowStatus.COMPLETED, WorkflowStatus.FAILED):
             return  # ignore events for already-terminal workflows
-        graph = TaskGraph(workflow)
 
         task = workflow.tasks.get(event.task_id)
         if task is None:

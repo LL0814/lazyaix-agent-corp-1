@@ -6,6 +6,7 @@ from events.in_memory import InMemoryEventBus
 from events.schema import Event, EventType
 from workflow.coordinator import WorkflowCoordinator
 from workflow.state import Task, TaskStatus, Workflow, WorkflowStatus
+from workflow.state_store import InMemoryStateStore
 
 
 def make_wf(*tasks: Task) -> Workflow:
@@ -28,7 +29,8 @@ async def test_coordinator_publishes_ready_tasks():
     bus.subscribe(EventType.TASK_READY, collect_ready)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     wf = make_wf(Task("r1", "research", "researcher", "do research"))
     await coord.start_workflow(wf)
     await asyncio.sleep(0.05)
@@ -54,7 +56,8 @@ async def test_coordinator_triggers_downstream():
     bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     r1 = Task("r1", "research", "researcher", "do research")
     w1 = Task("w1", "write", "writer", "write", dependencies=["r1"])
     wf = make_wf(r1, w1)
@@ -89,7 +92,8 @@ async def test_coordinator_workflow_completed():
     bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     wf = make_wf(Task("w1", "write", "writer", "write"))
     await coord.start_workflow(wf)
     await coord.handle_task_completed(
@@ -126,7 +130,8 @@ async def test_coordinator_retries_failed_task():
     bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     wf = make_wf(Task("t1", "work", "worker", "do work"))
     await coord.start_workflow(wf)
     await asyncio.sleep(0.05)
@@ -181,7 +186,8 @@ async def test_coordinator_blocks_downstream_on_failure():
     bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     t1 = Task("t1", "work", "worker", "do work")
     t2 = Task("t2", "work", "worker", "do more", dependencies=["t1"])
     wf = make_wf(t1, t2)
@@ -218,7 +224,8 @@ async def test_coordinator_blocks_transitively_on_failure():
     bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     t1 = Task("t1", "work", "worker", "do work")
     t2 = Task("t2", "work", "worker", "do more", dependencies=["t1"])
     t3 = Task("t3", "work", "worker", "do even more", dependencies=["t2"])
@@ -257,7 +264,8 @@ async def test_coordinator_ignores_duplicate_completed():
     bus.subscribe(EventType.WORKFLOW_COMPLETED, collect_completed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     wf = make_wf(Task("t1", "work", "worker", "do work"))
     await coord.start_workflow(wf)
 
@@ -284,7 +292,8 @@ async def test_coordinator_future_resolved_on_completion():
     bus = InMemoryEventBus()
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     wf = make_wf(Task("t1", "work", "worker", "do work"))
     future = coord.create_future(wf.workflow_id)
     coord.set_completion_future(wf.workflow_id, future)
@@ -318,7 +327,8 @@ async def test_coordinator_duplicate_workflow_failed_ignored():
     bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     wf = make_wf(Task("t1", "work", "worker", "do work"))
     await coord.start_workflow(wf)
 
@@ -352,7 +362,8 @@ async def test_coordinator_failure_populates_workflow_error():
     bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store)
     t1 = Task("t1", "work", "worker", "do work")
     t2 = Task("t2", "work", "worker", "do more", dependencies=["t1"])
     wf = make_wf(t1, t2)
@@ -392,7 +403,8 @@ async def test_coordinator_retry_exhaustion_blocks_downstream():
     bus.subscribe(EventType.WORKFLOW_FAILED, collect_failed)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus, max_retries=1)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store, max_retries=1)
     r1 = Task("r1", "research", "researcher", "do research")
     w1 = Task("w1", "write", "writer", "write", dependencies=["r1"])
     wf = make_wf(r1, w1)
@@ -443,7 +455,8 @@ async def test_coordinator_respects_max_retries():
     bus.subscribe(EventType.TASK_READY, collect_ready)
     await bus.start()
 
-    coord = WorkflowCoordinator(bus, max_retries=3)
+    store = InMemoryStateStore()
+    coord = WorkflowCoordinator(bus, store, max_retries=3)
     wf = make_wf(Task("t1", "work", "worker", "do work"))
     await coord.start_workflow(wf)
     await asyncio.sleep(0.05)
