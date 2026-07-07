@@ -70,6 +70,20 @@ class MemorySearchResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class RedactionResult(BaseModel):
+    text: str
+    redacted: bool = False
+    markers: list[str] = Field(default_factory=list)
+
+
+class MemoryClassification(BaseModel):
+    should_remember: bool
+    kind: MemoryKind = MemoryKind.EPISODIC
+    confidence: float = 0.5
+    importance: float = 0.5
+    reason: str = ""
+
+
 class DebugCounts(BaseModel):
     kv: int = 0
     records: int = 0
