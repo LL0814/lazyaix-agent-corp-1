@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "A team exercise scaffold for building a modular agent."
 requires-python = ">=3.10"
 dependencies = [
+    "FlagEmbedding>=1.2.11",
+    "numpy>=1.26",
     "openai>=2.44.0",
     "pydantic>=2.0",
 ]
