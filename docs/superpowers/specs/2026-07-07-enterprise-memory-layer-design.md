@@ -8,6 +8,8 @@ The implementation must stay compatible with the existing `Memory.store(key, val
 
 The work must be delivered in small, inspectable engineering steps. Each step must end with a report, automatic verification evidence, exact file/interface locations, and manual verification instructions. No later step may begin until the user approves the previous step.
 
+All implementation plans, phase reports, manual verification instructions, and delivery summaries must be written in Chinese. Code identifiers, command names, file paths, environment variable names, and public API names remain in English.
+
 ## 2. Current Project Context
 
 Current memory state:
@@ -404,6 +406,8 @@ Implementation must be broken into controlled phases. Each phase must:
 8. wait for user approval before the next phase
 
 The agent must not batch multiple phases into one opaque implementation.
+
+All phase output must be written in Chinese, including the implementation plan, phase reports, verification notes, approval requests, and known limitation summaries.
 
 ## 17. Phase Plan
 
@@ -840,31 +844,31 @@ Phase report must answer:
 Every completed phase report must include:
 
 ```markdown
-## Phase N Report
+## 第 N 阶段报告
 
-### What Changed
+### 本阶段改动
 
-### Files Created
+### 新增文件
 
-### Files Modified
+### 修改文件
 
-### Public Interfaces
+### 公开接口
 
-### Automatic Verification
+### 自动验证
 
-Command:
-Result:
+命令：
+结果：
 
-### Manual Verification
+### 人工验证
 
-Steps:
-Expected:
+步骤：
+预期：
 
-### Known Limitations
+### 已知限制
 
-### Request For Approval
+### 请求确认
 
-Please review and confirm whether I should proceed to Phase N+1.
+请审阅本阶段结果，并确认是否进入第 N+1 阶段。
 ```
 
 ## 19. Acceptance Criteria
