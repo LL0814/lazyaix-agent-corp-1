@@ -164,3 +164,29 @@ def test_process_outbox_stores_extractor_content_instead_of_raw_turn(tmp_path: P
     assert record.confidence == 0.91
     assert record.importance == 0.82
     assert row["payload"]["worker_result"]["content"] == "用户偏好入住安静的酒店。"
+
+
+def test_process_outbox_updates_summary_table_for_summary_candidate(tmp_path: Path):
+    extractor = StaticExtractor(
+        MemoryClassification(
+            should_remember=True,
+            kind=MemoryKind.SUMMARY,
+            content="用户正在验证 Ollama bge-m3 的长期记忆系统。",
+            confidence=0.88,
+            importance=0.9,
+            reason="DeepSeek 抽取出的对话摘要",
+        )
+    )
+    memory = make_memory(tmp_path, candidate_extractor=extractor)
+    memory.store("history", [{"input": "总结一下当前记忆系统测试", "response": "好的"}])
+
+    result = memory.process_outbox(limit=10)
+
+    row = memory._sqlite.list_outbox()[0]
+
+    assert result["processed"] == 1
+    assert result["remembered_ids"] == []
+    assert memory.get_summary() == "用户正在验证 Ollama bge-m3 的长期记忆系统。"
+    assert memory._sqlite.list_active_records() == []
+    assert memory._vector_index.points == {}
+    assert row["payload"]["worker_result"]["kind"] == "summary"

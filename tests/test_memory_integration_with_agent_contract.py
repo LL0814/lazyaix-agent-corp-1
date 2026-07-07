@@ -106,3 +106,15 @@ def test_agent_auto_processes_outbox_and_injects_long_term_memory(tmp_path: Path
     assert memory.debug_counts().records >= 1
     assert "Long-term memories:" in prompts[-1]
     assert "用户偏好入住安静的酒店。" in prompts[-1]
+
+
+def test_agent_prompt_injects_summary_memory(tmp_path: Path):
+    context = Context()
+    memory = Memory(config={"MEMORY_DB_PATH": str(tmp_path / "memory.sqlite3")})
+    memory.update_summary("用户正在验证 Ollama bge-m3 的企业级记忆系统。")
+    agent = Agent(context=context, memory=memory)
+
+    prompt = agent._build_prompt("我们现在在验证什么？")
+
+    assert "Memory summary:" in prompt
+    assert "用户正在验证 Ollama bge-m3 的企业级记忆系统。" in prompt

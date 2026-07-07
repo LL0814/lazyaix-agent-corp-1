@@ -95,6 +95,8 @@ Long-term memories:
 MODEL=deepseek:deepseek-v4-pro \
 MEMORY_EXTRACTOR_PROVIDER=deepseek \
 MEMORY_DEEPSEEK_MODEL=deepseek-v4-pro \
+MEMORY_EMBEDDING_PROVIDER=ollama \
+OLLAMA_EMBEDDING_MODEL=bge-m3 \
 uv run python loop.py
 ```
 

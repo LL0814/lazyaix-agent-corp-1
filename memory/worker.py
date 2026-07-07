@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from memory.audit import DEFAULT_ACTOR
+from memory.models import MemoryKind
 from memory.redaction import redact_text
 
 
@@ -64,6 +65,37 @@ class MemoryOutboxWorker:
                 return
 
             memory_content = classification.content or redacted.text
+            if classification.kind == MemoryKind.SUMMARY:
+                self.memory.update_summary(memory_content)
+                processed_payload = {
+                    **payload,
+                    "worker_result": {
+                        "should_remember": True,
+                        "kind": classification.kind.value,
+                        "confidence": classification.confidence,
+                        "importance": classification.importance,
+                        "reason": classification.reason,
+                        "content": memory_content,
+                        "redacted": redacted.redacted,
+                        "redaction_markers": redacted.markers,
+                    },
+                }
+                self.memory._sqlite.update_outbox_status(
+                    event_id,
+                    "processed",
+                    payload=processed_payload,
+                    last_error=None,
+                    increment_attempts=True,
+                )
+                self.memory._sqlite.append_audit(
+                    DEFAULT_ACTOR,
+                    "memory.outbox.processed",
+                    event_id,
+                    {"kind": classification.kind.value},
+                )
+                result["processed"] += 1
+                return
+
             memory_id = self.memory.remember(
                 memory_content,
                 kind=classification.kind.value,

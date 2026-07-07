@@ -140,6 +140,10 @@ class Agent:
         parts = []
 
         if self._memory_enabled():
+            summary_memory = self._retrieve_summary_memory()
+            if summary_memory:
+                parts.append(summary_memory)
+
             long_term_memory = self._retrieve_long_term_memories(user_input)
             if long_term_memory:
                 parts.append(long_term_memory)
@@ -162,6 +166,17 @@ class Agent:
 
         parts.append(f"Q: {user_input}")
         return "\n\n".join(parts)
+
+    def _retrieve_summary_memory(self):
+        if not hasattr(self.memory, "get_summary"):
+            return ""
+        try:
+            summary = self.memory.get_summary()
+        except Exception:
+            return ""
+        if not summary:
+            return ""
+        return f"Memory summary:\n{summary}"
 
     def _retrieve_long_term_memories(self, user_input):
         if not hasattr(self.memory, "search") or not hasattr(self.memory, "debug_counts"):

@@ -30,8 +30,11 @@ class MemoryConfig(BaseModel):
     db_path: str = ".memory/memory.sqlite3"
     qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "agent_memories_v1"
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_provider: str = "ollama"
+    embedding_model: str = "bge-m3"
     embedding_dimension: int = 1024
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_timeout_seconds: float = 120.0
     extractor_provider: str = "rule"
     extractor_fallback_to_rule: bool = True
     deepseek_api_key: str = ""
@@ -61,8 +64,15 @@ class MemoryConfig(BaseModel):
             "db_path": os.getenv("MEMORY_DB_PATH", ".memory/memory.sqlite3"),
             "qdrant_url": os.getenv("QDRANT_URL", "http://localhost:6333"),
             "qdrant_collection": os.getenv("QDRANT_COLLECTION", "agent_memories_v1"),
-            "embedding_model": os.getenv("MEMORY_EMBEDDING_MODEL", "BAAI/bge-m3"),
+            "embedding_provider": os.getenv("MEMORY_EMBEDDING_PROVIDER", "ollama"),
+            "embedding_model": (
+                os.getenv("MEMORY_EMBEDDING_MODEL")
+                or os.getenv("OLLAMA_EMBEDDING_MODEL")
+                or "bge-m3"
+            ),
             "embedding_dimension": int(os.getenv("MEMORY_EMBEDDING_DIMENSION", "1024")),
+            "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            "ollama_timeout_seconds": float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
             "extractor_provider": os.getenv("MEMORY_EXTRACTOR_PROVIDER", "rule"),
             "extractor_fallback_to_rule": _bool(os.getenv("MEMORY_EXTRACTOR_FALLBACK_TO_RULE"), True),
             "deepseek_api_key": deepseek_api_key,
@@ -98,8 +108,12 @@ class MemoryConfig(BaseModel):
             "MEMORY_DB_PATH": "db_path",
             "QDRANT_URL": "qdrant_url",
             "QDRANT_COLLECTION": "qdrant_collection",
+            "MEMORY_EMBEDDING_PROVIDER": "embedding_provider",
             "MEMORY_EMBEDDING_MODEL": "embedding_model",
+            "OLLAMA_EMBEDDING_MODEL": "embedding_model",
             "MEMORY_EMBEDDING_DIMENSION": "embedding_dimension",
+            "OLLAMA_BASE_URL": "ollama_base_url",
+            "OLLAMA_TIMEOUT_SECONDS": "ollama_timeout_seconds",
             "MEMORY_EXTRACTOR_PROVIDER": "extractor_provider",
             "MEMORY_EXTRACTOR_FALLBACK_TO_RULE": "extractor_fallback_to_rule",
             "MEMORY_DEEPSEEK_API_KEY": "deepseek_api_key",

@@ -32,8 +32,10 @@ def test_default_config_values():
     assert config.db_path == ".memory/memory.sqlite3"
     assert config.qdrant_url == "http://localhost:6333"
     assert config.qdrant_collection == "agent_memories_v1"
-    assert config.embedding_model == "BAAI/bge-m3"
+    assert config.embedding_provider == "ollama"
+    assert config.embedding_model == "bge-m3"
     assert config.embedding_dimension == 1024
+    assert config.ollama_base_url == "http://localhost:11434"
 
 
 def test_memory_enums_are_stable():

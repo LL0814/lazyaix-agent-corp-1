@@ -1,6 +1,10 @@
 import pytest
 
-from memory.embeddings import BGEM3EmbeddingProvider, FakeEmbeddingProvider
+from memory.embeddings import (
+    BGEM3EmbeddingProvider,
+    FakeEmbeddingProvider,
+    OllamaEmbeddingProvider,
+)
 
 
 def test_fake_embedding_provider_is_deterministic():
@@ -38,3 +42,15 @@ def test_bge_provider_missing_dependency_error_is_clear(monkeypatch):
 
     with pytest.raises(RuntimeError, match="FlagEmbedding"):
         provider.embed("测试")
+
+
+def test_ollama_embedding_provider_uses_real_local_bge_m3():
+    provider = OllamaEmbeddingProvider(
+        model_name="bge-m3",
+        base_url="http://localhost:11434",
+    )
+
+    vector = provider.embed("用户喜欢安静酒店")
+
+    assert len(vector) == 1024
+    assert all(isinstance(value, float) for value in vector[:10])

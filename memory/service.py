@@ -14,7 +14,7 @@ from memory.audit import (
 from memory.backends.qdrant_store import QdrantMemoryIndex
 from memory.backends.sqlite_store import SQLiteMemoryStore
 from memory.config import MemoryConfig
-from memory.embeddings import BGEM3EmbeddingProvider
+from memory.embeddings import create_embedding_provider
 from memory.exporter import export_jsonl, export_markdown, parse_jsonl
 from memory.extractors import MemoryCandidateExtractor, create_memory_candidate_extractor
 from memory.models import (
@@ -56,9 +56,7 @@ class Memory:
             if self.config.backend == "sqlite"
             else None
         )
-        self._embedding_provider = embedding_provider or BGEM3EmbeddingProvider(
-            model_name=self.config.embedding_model
-        )
+        self._embedding_provider = embedding_provider or create_embedding_provider(self.config)
         self._vector_index = vector_index or QdrantMemoryIndex(
             url=self.config.qdrant_url,
             collection_name=self.config.qdrant_collection,

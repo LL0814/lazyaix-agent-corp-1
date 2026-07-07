@@ -128,8 +128,7 @@ class Skill:
 
         action = decision.get("action")
         if action == "direct":
-            response = decision.get("response") or llm_response
-            return {"action": "direct", "response": response}
+            return {"action": "direct", "response": llm_response}
         if action == "tool":
             return {
                 "action": "tool",
