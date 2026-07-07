@@ -265,6 +265,7 @@ class Agent:
     async def _process_turn_event_driven(self, user_input: str) -> str:
         """Run the turn using event-driven task scheduling."""
         from db.outbox_repository import PostgresOutboxRepository
+        from events.outbox_publisher import OutboxPublisher
 
         event_bus = await self._create_event_bus()
         state_store, pool = await self._create_state_store()
@@ -285,6 +286,17 @@ class Agent:
         event_bus.subscribe(EventType.AGENT_COMPLETED, coordinator.handle_task_completed)
         event_bus.subscribe(EventType.AGENT_FAILED, coordinator.handle_task_failed)
         await event_bus.start()
+
+        publisher: OutboxPublisher | None = None
+        if outbox is not None:
+            publisher = OutboxPublisher(
+                outbox,
+                poll_interval=float(
+                    self.config.get("OUTBOX_POLL_INTERVAL", "1.0")
+                ),
+                event_bus=event_bus,
+            )
+            await publisher.start()
 
         try:
             prompt = self._build_planning_prompt_v2(user_input)
@@ -318,6 +330,8 @@ class Agent:
 
             return self._finalize_workflow(workflow, user_input)
         finally:
+            if publisher is not None:
+                await publisher.stop()
             await event_bus.stop()
 
     def _parse_plan_v2(self, raw: str) -> dict:
