@@ -6,6 +6,7 @@ import asyncio
 import logging
 from typing import Awaitable, Callable
 
+from events.event_store import EventStore
 from events.schema import Event
 
 logger = logging.getLogger(__name__)
@@ -14,10 +15,11 @@ logger = logging.getLogger(__name__)
 class InMemoryEventBus:
     """Process-local event bus. Each event type/handler has its own queue and consumer task."""
 
-    def __init__(self):
+    def __init__(self, event_store: EventStore | None = None):
         self._handlers: dict[str, list[Callable[[Event], Awaitable[None]]]] = {}
         self._queues: dict[str, list[asyncio.Queue[Event]]] = {}
         self._tasks: list[asyncio.Task] = []
+        self._event_store = event_store
 
     def subscribe(
         self,
@@ -28,6 +30,8 @@ class InMemoryEventBus:
         self._queues.setdefault(event_type, []).append(asyncio.Queue())
 
     async def publish(self, event: Event) -> None:
+        if self._event_store is not None:
+            await self._event_store.append(event)
         for queue in self._queues.setdefault(event.event_type, []):
             await queue.put(event)
 
