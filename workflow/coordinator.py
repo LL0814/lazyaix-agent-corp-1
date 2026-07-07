@@ -41,9 +41,11 @@ class WorkflowCoordinator:
         graph = TaskGraph(workflow)
         graph.validate()
         workflow.status = WorkflowStatus.EXECUTING
-        await self.state_store.update_workflow_status(
+        updated = await self.state_store.update_workflow_status(
             workflow.workflow_id, WorkflowStatus.EXECUTING, version=workflow.version
         )
+        if updated:
+            workflow.version += 1
         await self._publish_ready_tasks(workflow)
 
     async def handle_task_completed(self, event: Event) -> None:
