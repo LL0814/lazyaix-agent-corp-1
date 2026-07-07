@@ -109,6 +109,22 @@ class SQLiteMemoryStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_summaries (
+                    summary_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(tenant_id, user_id, project_id, scope)
+                )
+                """
+            )
             conn.commit()
 
     @staticmethod
@@ -338,6 +354,74 @@ class SQLiteMemoryStore:
             conn.commit()
         return cursor.rowcount > 0
 
+    def upsert_summary(
+        self,
+        tenant_id: str,
+        user_id: str,
+        project_id: str,
+        scope: str,
+        content: str,
+    ) -> None:
+        now = self._now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_summaries (
+                    summary_id, tenant_id, user_id, project_id, scope, content,
+                    version, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, user_id, project_id, scope)
+                DO UPDATE SET
+                    content = excluded.content,
+                    version = memory_summaries.version + 1,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    uuid.uuid4().hex,
+                    tenant_id,
+                    user_id,
+                    project_id,
+                    scope,
+                    content,
+                    1,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def get_summary(
+        self,
+        tenant_id: str,
+        user_id: str,
+        project_id: str,
+        scope: str,
+    ) -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT content
+                FROM memory_summaries
+                WHERE tenant_id = ? AND user_id = ? AND project_id = ? AND scope = ?
+                """,
+                (tenant_id, user_id, project_id, scope),
+            ).fetchone()
+        return str(row["content"]) if row is not None else ""
+
+    def list_active_records(self) -> list[MemoryRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM memory_records
+                WHERE status = ?
+                ORDER BY created_at ASC
+                """,
+                (MemoryStatus.ACTIVE.value,),
+            ).fetchall()
+        return [self._record_from_row(row) for row in rows]
+
     def _fetch_record_row(self, memory_id: str) -> sqlite3.Row | None:
         with self._connect() as conn:
             return conn.execute(
@@ -379,10 +463,12 @@ class SQLiteMemoryStore:
             audit_count = conn.execute("SELECT COUNT(*) FROM memory_audit_log").fetchone()[0]
             records_count = conn.execute("SELECT COUNT(*) FROM memory_records").fetchone()[0]
             sources_count = conn.execute("SELECT COUNT(*) FROM memory_sources").fetchone()[0]
+            summaries_count = conn.execute("SELECT COUNT(*) FROM memory_summaries").fetchone()[0]
         return DebugCounts(
             kv=kv_count,
             records=records_count,
             sources=sources_count,
             outbox=outbox_count,
             audit=audit_count,
+            summaries=summaries_count,
         )

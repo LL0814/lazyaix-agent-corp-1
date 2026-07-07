@@ -15,6 +15,7 @@ from memory.backends.qdrant_store import QdrantMemoryIndex
 from memory.backends.sqlite_store import SQLiteMemoryStore
 from memory.config import MemoryConfig
 from memory.embeddings import BGEM3EmbeddingProvider
+from memory.exporter import export_jsonl, export_markdown, parse_jsonl
 from memory.models import (
     DebugCounts,
     MemoryKind,
@@ -190,6 +191,65 @@ class Memory:
                 {"reason": reason},
             )
         return changed
+
+    def get_summary(self, *, scope: str = "project") -> str:
+        if self._sqlite is None:
+            return ""
+        return self._sqlite.get_summary(
+            self.config.tenant_id,
+            self.config.user_id,
+            self.config.project_id,
+            scope,
+        )
+
+    def update_summary(self, summary: str, *, scope: str = "project") -> None:
+        if self._sqlite is None:
+            raise RuntimeError("Summary memory requires the sqlite backend.")
+        self._sqlite.upsert_summary(
+            self.config.tenant_id,
+            self.config.user_id,
+            self.config.project_id,
+            scope,
+            summary,
+        )
+
+    def export(self, format: str = "markdown") -> str:
+        if self._sqlite is None:
+            return ""
+        records = self._sqlite.list_active_records()
+        if format == "markdown":
+            return export_markdown(self.get_summary(), records)
+        if format == "jsonl":
+            return export_jsonl(records)
+        raise ValueError(f"Unsupported export format: {format}")
+
+    def import_memories(self, content: str, *, source: str = "manual") -> list[str]:
+        created_ids: list[str] = []
+        if content.lstrip().startswith("{"):
+            for row in parse_jsonl(content):
+                created_ids.append(
+                    self.remember(
+                        str(row["content"]),
+                        kind=str(row.get("kind", "semantic")),
+                        scope=str(row.get("scope", "project")),
+                        metadata=dict(row.get("metadata", {})),
+                        source={"source_type": source},
+                    )
+                )
+            return created_ids
+
+        for line in content.splitlines():
+            if not line.startswith("- "):
+                continue
+            item = line[2:].strip()
+            if item.startswith("[") and "] " in item:
+                item = item.split("] ", 1)[1]
+            created_ids.append(
+                self.remember(item, source={"source_type": source})
+            )
+        if not created_ids:
+            raise ValueError("No importable memories found")
+        return created_ids
 
     def _enqueue_history_candidates(self, value: object) -> None:
         if self._sqlite is None or not isinstance(value, list):
