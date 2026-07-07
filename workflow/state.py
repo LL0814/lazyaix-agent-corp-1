@@ -45,6 +45,10 @@ class Task:
     error: dict | None = None
     retry_count: int = 0
     version: int = 1
+    parent_task_id: str | None = None
+    target_agent: str | None = None
+    max_retries: int = 2
+    priority: str = "normal"
 
 
 @dataclass
@@ -57,3 +61,4 @@ class Workflow:
     final_result: str | None = None
     error: dict | None = None
     version: int = 1
+    parent_workflow_id: str | None = None
