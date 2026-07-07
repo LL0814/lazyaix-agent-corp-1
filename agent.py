@@ -14,7 +14,9 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass
+    from config.env import load_env_file
+
+    load_env_file()
 
 
 # Try to import real implementations from student modules.

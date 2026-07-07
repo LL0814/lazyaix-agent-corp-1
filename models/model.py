@@ -2,12 +2,14 @@
 
 import os
 
+from config.env import load_env_file
+
 try:
     from dotenv import load_dotenv
 
     load_dotenv()
 except ImportError:
-    pass
+    load_env_file()
 
 from .factory import ProviderFactory
 from .providers.base import BaseProvider
@@ -29,6 +31,7 @@ class Model:
     DEFAULT_MODEL = "deepseek:deepseek-v4-pro"
 
     def __init__(self):
+        load_env_file()
         provider, model_name = self._parse_model_spec(
             os.environ.get("MODEL", self.DEFAULT_MODEL)
         )

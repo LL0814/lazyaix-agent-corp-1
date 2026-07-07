@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from config.env import load_env_file
+
 
 def _bool(value: Any, default: bool) -> bool:
     if value is None:
@@ -44,6 +46,7 @@ class MemoryConfig(BaseModel):
 
     @classmethod
     def from_env(cls, overrides: dict[str, Any] | None = None) -> "MemoryConfig":
+        load_env_file()
         overrides = cls._normalize_overrides(overrides or {})
         deepseek_api_key = (
             os.getenv("MEMORY_DEEPSEEK_API_KEY")
