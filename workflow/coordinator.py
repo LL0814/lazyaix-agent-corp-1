@@ -63,6 +63,7 @@ class WorkflowCoordinator:
         graph.mark_completed(event.task_id, event.payload.get("result"))
         await self._publish_ready_tasks(workflow)
         await self._check_completion(workflow)
+        await self.state_store.save_workflow(workflow)
 
     async def handle_task_failed(self, event: Event) -> None:
         loaded = await self.state_store.load_task_graph(event.workflow_id)
@@ -86,11 +87,13 @@ class WorkflowCoordinator:
             task.retry_count += 1
             task.status = TaskStatus.RETRYING
             await self._publish_event_for_task(task, workflow)
+            await self.state_store.save_workflow(workflow)
             return
 
         graph.mark_failed(event.task_id, event.payload)
         self._block_downstream(workflow, event.task_id)
         await self._check_completion(workflow)
+        await self.state_store.save_workflow(workflow)
 
     def _block_downstream(self, workflow: Workflow, failed_task_id: str) -> None:
         graph = TaskGraph(workflow)
@@ -113,6 +116,7 @@ class WorkflowCoordinator:
         for task in graph.ready_tasks():
             graph.mark_ready(task.task_id)
             await self._publish_event_for_task(task, workflow)
+        await self.state_store.save_workflow(workflow)
 
     async def _publish_event_for_task(self, task, workflow: Workflow) -> None:
         if task.status not in (TaskStatus.READY, TaskStatus.RETRYING):
@@ -175,6 +179,7 @@ class WorkflowCoordinator:
             self._resolve_completion_future(workflow.workflow_id)
         elif not graph.ready_tasks():
             workflow.status = WorkflowStatus.WAITING
+        await self.state_store.save_workflow(workflow)
 
     def _resolve_completion_future(self, workflow_id: str) -> None:
         future = self._completions.pop(workflow_id, None)

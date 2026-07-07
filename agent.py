@@ -18,6 +18,7 @@ import os
 import re
 import uuid
 
+from db.connection import create_pool
 from events.bus import EventBus
 from events.in_memory import InMemoryEventBus
 from events.schema import Event, EventType
@@ -154,6 +155,17 @@ class Agent:
     def _event_driven_enabled(self):
         return self.config.get("ENABLE_EVENT_DRIVEN", "false").lower() == "true"
 
+    def _state_store_backend(self) -> str:
+        return self.config.get("STATE_STORE_BACKEND", "memory").lower()
+
+    async def _create_state_store(self):
+        backend = self._state_store_backend()
+        if backend == "postgres":
+            pool = await create_pool()
+            from db.postgres_state_store import PostgresStateStore
+            return PostgresStateStore(pool)
+        return InMemoryStateStore()
+
     def _build_tasks_from_plan(self, tasks_data: list[dict]) -> dict[str, Task]:
         """Convert LLM task plan into Task objects."""
         tasks: dict[str, Task] = {}
@@ -234,7 +246,7 @@ class Agent:
     async def _process_turn_event_driven(self, user_input: str) -> str:
         """Run the turn using event-driven task scheduling."""
         event_bus = InMemoryEventBus()
-        state_store = InMemoryStateStore()
+        state_store = await self._create_state_store()
         max_retries = int(self.config.get("MAX_RETRIES", "2"))
         coordinator = WorkflowCoordinator(event_bus, state_store, max_retries=max_retries)
         scheduler = Scheduler(
