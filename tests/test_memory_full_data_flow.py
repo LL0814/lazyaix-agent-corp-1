@@ -167,56 +167,51 @@ def test_history_outbox_to_candidate_to_record_data_flow(tmp_path: Path):
     }
 
     memory.store("history", [history_turn])
-    outbox_rows = memory._sqlite.list_outbox()
-    event = outbox_rows[0]
+    pending_event = memory._sqlite.list_outbox()[0]
+    result = memory.process_outbox(limit=10)
+    event = memory._sqlite.list_outbox()[0]
     candidate_text = event["payload"]["text"]
-    redacted = redact_text(candidate_text)
-    classification = classify_memory_candidate(redacted.text)
-    memory_id = memory.remember(
-        redacted.text,
-        kind=classification.kind.value,
-        metadata={"outbox_event_id": event["event_id"]},
-        source={"source_type": "outbox", "source_ref": event["event_id"]},
-    )
+    worker_result = event["payload"]["worker_result"]
+    memory_id = worker_result["memory_id"]
     record = memory._sqlite.get_record(memory_id)
 
     emit_flow(
-        "history.outbox.manual_candidate_consumption",
+        "history.outbox.automatic_worker_consumption",
         [
             {"from": "Agent/history turn", "to": "Memory.store('history')", "data": history_turn},
             {"from": "Memory.store('history')", "to": "SQLite memory_kv", "key": "history"},
             {
                 "from": "Memory.store('history')",
                 "to": "SQLite memory_outbox",
-                "event_type": event["event_type"],
-                "status": event["status"],
+                "event_type": pending_event["event_type"],
+                "status": pending_event["status"],
                 "payload_text": candidate_text,
             },
-            {"from": "outbox.payload.text", "to": "redact_text", "redacted": redacted},
-            {"from": "redacted.text", "to": "classify_memory_candidate", "classification": classification},
             {
-                "from": "classification.should_remember=True",
-                "to": "Memory.remember(kind=procedural)",
-                "memory_id": memory_id,
+                "from": "memory_outbox.pending",
+                "to": "Memory.process_outbox -> redact_text -> classify_memory_candidate",
+                "worker_result": worker_result,
+                "process_result": result,
             },
             {
-                "from": "Memory.remember",
+                "from": "MemoryOutboxWorker",
                 "to": "SQLite memory_records + Fake Qdrant index",
                 "record": record,
                 "vector_point_exists": memory_id in memory._vector_index.points,
             },
             {
-                "from": "current implementation",
-                "to": "worker gap",
-                "note": "outbox 事件已产生；自动 worker 尚未实现，这里用测试手动模拟消费。",
+                "from": "memory_outbox.pending",
+                "to": "memory_outbox.processed",
+                "status": event["status"],
             },
         ],
     )
 
     assert event["event_type"] == "memory.semantic_candidate.created"
-    assert event["status"] == "pending"
-    assert classification.should_remember is True
-    assert classification.kind == MemoryKind.PROCEDURAL
+    assert event["status"] == "processed"
+    assert result["processed"] == 1
+    assert worker_result["should_remember"] is True
+    assert worker_result["kind"] == MemoryKind.PROCEDURAL.value
     assert record is not None
     assert record.kind == MemoryKind.PROCEDURAL
     assert memory_id in memory._vector_index.points
@@ -346,6 +341,7 @@ def test_qdrant_index_backend_data_flow():
 
     index.ensure_collection()
     index.upsert_memory(record, [0.1] * 1024)
+    point_id, point = next(iter(client.points["agent_memories_v1"].items()))
     results = index.search([0.1] * 1024, {"tenant_id": "local"}, top_k=3)
     index.delete_memory(record.memory_id)
 
@@ -362,7 +358,9 @@ def test_qdrant_index_backend_data_flow():
             {
                 "from": "MemoryRecord + vector",
                 "to": "Qdrant point payload",
-                "payload": client.points["agent_memories_v1"][record.memory_id].payload,
+                "memory_id": record.memory_id,
+                "qdrant_point_id": point_id,
+                "payload": point.payload,
             },
             {"from": "Qdrant query_points", "to": "search result payload", "results": results},
             {"from": "QdrantMemoryIndex.delete_memory", "to": "client.delete", "deleted": bool(client.deleted)},

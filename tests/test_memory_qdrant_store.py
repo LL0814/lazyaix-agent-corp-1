@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from memory.backends.qdrant_store import QdrantMemoryIndex
 from memory.models import MemoryKind, MemoryRecord, MemoryScope
@@ -82,11 +83,26 @@ def test_upsert_memory_writes_payload():
 
     index.upsert_memory(record, [0.1] * 1024)
 
-    point = client.points["agent_memories_v1"]["mem_1"]
+    point = next(iter(client.points["agent_memories_v1"].values()))
     assert point.payload["memory_id"] == "mem_1"
     assert point.payload["tenant_id"] == "local"
     assert point.payload["project_id"] == "lazyaiX-agent-corp-1"
     assert point.payload["status"] == "active"
+
+
+def test_upsert_memory_uses_qdrant_valid_uuid_point_id():
+    client = FakeQdrantClient()
+    index = QdrantMemoryIndex(
+        client=client,
+        collection_name="agent_memories_v1",
+        vector_size=1024,
+    )
+
+    index.upsert_memory(make_record(), [0.1] * 1024)
+
+    point_id = next(iter(client.points["agent_memories_v1"].keys()))
+    UUID(str(point_id))
+    assert point_id != "mem_1"
 
 
 def test_search_returns_payload_results():

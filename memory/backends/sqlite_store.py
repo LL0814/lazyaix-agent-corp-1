@@ -265,6 +265,42 @@ class SQLiteMemoryStore:
             for row in rows
         ]
 
+    def update_outbox_status(
+        self,
+        event_id: str,
+        status: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        last_error: str | None = None,
+        increment_attempts: bool = False,
+    ) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT payload_json, attempts
+                FROM memory_outbox
+                WHERE event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            payload_json = json.dumps(
+                payload if payload is not None else json.loads(row["payload_json"]),
+                ensure_ascii=False,
+            )
+            attempts = int(row["attempts"]) + 1 if increment_attempts else int(row["attempts"])
+            cursor = conn.execute(
+                """
+                UPDATE memory_outbox
+                SET status = ?, payload_json = ?, attempts = ?, last_error = ?, updated_at = ?
+                WHERE event_id = ?
+                """,
+                (status, payload_json, attempts, last_error, self._now(), event_id),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+
     @staticmethod
     def history_turn_dedupe_key(turn: object) -> str:
         raw = json.dumps(turn, ensure_ascii=False, sort_keys=True, default=str)

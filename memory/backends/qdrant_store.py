@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from qdrant_client import QdrantClient
@@ -42,6 +43,14 @@ class QdrantMemoryIndex:
         )
 
     @staticmethod
+    def _point_id(memory_id: str) -> str:
+        try:
+            uuid.UUID(str(memory_id))
+            return str(memory_id)
+        except ValueError:
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, str(memory_id)))
+
+    @staticmethod
     def _payload(record: MemoryRecord) -> dict[str, Any]:
         return {
             "memory_id": record.memory_id,
@@ -64,7 +73,7 @@ class QdrantMemoryIndex:
     def upsert_memory(self, record: MemoryRecord, vector: list[float]) -> None:
         self.ensure_collection()
         point = PointStruct(
-            id=record.memory_id,
+            id=self._point_id(record.memory_id),
             vector=vector,
             payload=self._payload(record),
         )
@@ -107,5 +116,5 @@ class QdrantMemoryIndex:
     def delete_memory(self, memory_id: str) -> None:
         self.client.delete(
             collection_name=self.collection_name,
-            points_selector=PointIdsList(points=[memory_id]),
+            points_selector=PointIdsList(points=[self._point_id(memory_id)]),
         )

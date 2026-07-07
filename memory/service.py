@@ -28,6 +28,7 @@ from memory.models import (
 )
 from memory.redaction import redact_text
 from memory.retrieval import combined_score
+from memory.worker import MemoryOutboxWorker
 
 
 class Memory:
@@ -120,10 +121,10 @@ class Memory:
             metadata=metadata,
             source_id=source_ref.source_id,
         )
-        self._sqlite.insert_source(source_ref)
-        self._sqlite.insert_record(record)
         vector = self._embedding_provider.embed(redacted.text)
         self._vector_index.upsert_memory(record, vector)
+        self._sqlite.insert_source(source_ref)
+        self._sqlite.insert_record(record)
         self._sqlite.append_audit(
             DEFAULT_ACTOR,
             "memory.record.remembered",
@@ -131,6 +132,9 @@ class Memory:
             {"kind": kind, "scope": scope},
         )
         return memory_id
+
+    def process_outbox(self, *, limit: int = 10) -> dict[str, Any]:
+        return MemoryOutboxWorker(self).process_pending(limit=limit)
 
     def search(
         self,
