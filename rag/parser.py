@@ -53,7 +53,7 @@ class Parser:
         ext = ext.lower()
 
         # 文本/Markdown 直接读取
-        if ext in (".txt", ".md", ".markdown"):
+        if ext in (".env.example.txt", ".md", ".markdown"):
             return self._parse_as_text(file_path)
 
         # PDF 尝试多种解析器

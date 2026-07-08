@@ -3,8 +3,12 @@
 负责连接 Milvus、维护 Collection Schema/Index、提供向量检索与文档管理能力。
 当 pymilvus 未安装或服务不可达时，所有方法返回空结果，不抛出异常。
 
-bash standalone_embed.sh start
-bash standalone_embed.sh stop
+# 启动 Milvus
+docker compose -f docker-compose.milvus.yml up -d
+# 检查 Milvus 服务
+docker compose -f docker-compose.milvus.yml ps
+# 停止 Milvus
+docker compose -f docker-compose.milvus.yml down
 
 """
 

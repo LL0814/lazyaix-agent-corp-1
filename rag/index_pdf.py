@@ -7,6 +7,7 @@
 
 示例：
     python3 scripts/index_pdf.py rag/data/pdfs/成都旅游攻略.pdf --city 成都 --category 攻略
+    python3 rag/index_pdf.py rag/data/pdfs/ReAct文献翻译.pdf
 """
 
 import argparse
