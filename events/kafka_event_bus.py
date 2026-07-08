@@ -75,11 +75,14 @@ class KafkaEventBus:
             consumer = AIOKafkaConsumer(
                 topic,
                 bootstrap_servers=self._bootstrap_servers,
-                group_id=self._consumer_group,
+                group_id=f"{self._consumer_group}-{event_type}",
                 client_id=f"{self._client_id}-consumer-{event_type}",
                 value_deserializer=lambda v: v,
                 auto_offset_reset="earliest",
                 enable_auto_commit=True,
+                max_poll_interval_ms=300000,
+                session_timeout_ms=45000,
+                heartbeat_interval_ms=15000,
             )
             await consumer.start()
             self._consumers.append(consumer)
