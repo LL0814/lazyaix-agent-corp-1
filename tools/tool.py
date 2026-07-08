@@ -14,6 +14,7 @@
   │ search_hotel        │ 搜索酒店                        │ baidu_client + 本地JSON│
   │ search_restaurant   │ 搜索餐厅                        │ baidu_client + 本地JSON│
   │ generate_itinerary  │ 生成完整行程（编排以上 6 个工具）│ itinerary_generator   │
+  │ rag_retrieve        │ 检索旅游知识库（RAG）           │ rag.RAGTool          │
   └─────────────────────┴────────────────────────────────┴──────────────────────┘
 
 调用关系：
@@ -26,6 +27,7 @@ from typing import Any, Literal
 from . import amap_client, openmeteo_client
 from . import itinerary_generator
 from .models import POI, Weather, Route, Hotel, Restaurant, Itinerary
+from rag import RAGTool
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +38,16 @@ class Tool:
     被 Agent.process_turn 调用：
         result = self.tool.execute(decision["tool"], decision["params"])
     """
+
+    def __init__(self):
+        self._rag: RAGTool | None = None
+
+    @property
+    def rag(self) -> RAGTool:
+        """延迟初始化 RAGTool，避免在 Streamlit 启动时阻塞。"""
+        if self._rag is None:
+            self._rag = RAGTool()
+        return self._rag
 
     def execute(self, action: str, params: dict) -> Any:
         """统一入口，按 action 分发到具体实现。
@@ -56,20 +68,24 @@ class Tool:
             "search_hotel": self._search_hotel,
             "search_restaurant": self._search_restaurant,
             "generate_itinerary": self._generate_itinerary,
+            "rag_retrieve": self._rag_retrieve,
         }
 
         handler = dispatch.get(action)
         if not handler:
-            logger.warning("未知 action: %s", action)
+            logger.warning("[Tool] 未知 action: %s", action)
             return {"error": f"未知 action: {action}"}
 
+        logger.info("[Tool] 执行 action=%s, params=%s", action, params)
         try:
-            return handler(**params)
+            result = handler(**params)
+            logger.info("[Tool] action=%s 执行成功", action)
+            return result
         except TypeError as e:
-            logger.warning("action=%s 参数错误: %s | params=%s", action, e, params)
+            logger.warning("[Tool] action=%s 参数错误: %s | params=%s", action, e, params)
             return {"error": f"参数错误: {e}"}
         except Exception as e:  # noqa: BLE001
-            logger.exception("action=%s 执行异常: %s", action, e)
+            logger.exception("[Tool] action=%s 执行异常: %s", action, e)
             return {"error": str(e)}
 
     # ============ 真实 API 类 ============
@@ -171,6 +187,17 @@ class Tool:
         return restaurants[:limit]
 
     # ============ 内部编排类 ============
+
+    def _rag_retrieve(self, query: str, top_k: int = 5,
+                      filters: dict | None = None) -> list[dict]:
+        """RAG 检索入口。
+
+        Args:
+            query: 查询文本。
+            top_k: 返回结果数量上限。
+            filters: 元数据过滤条件，例如 {"city": "成都"}。
+        """
+        return self.rag.retrieve(query, top_k=top_k, filters=filters)
 
     def _generate_itinerary(self, destination: str, days: int,
                             budget_level: Literal["low", "mid", "high"] = "mid",

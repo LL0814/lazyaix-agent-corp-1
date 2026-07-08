@@ -19,6 +19,14 @@ VALIDATION_KEYWORDS = ["校验", "检查", "验证", "有问题吗", "可行吗"
 REGENERATE_KEYWORDS = ["重新", "再生成", "换一个", "重做"]
 RESET_KEYWORDS = ["重新开始", "换个目的地", "不去了", "取消"]
 
+# 旅行意图关键词。命中任一关键词即进入旅行 Skill 流程。
+TRAVEL_KEYWORDS = [
+    "旅游", "旅行", "出行", "游玩", "行程", "攻略",
+    "景点", "景区", "酒店", "住宿", "民宿", "机票", "车票", "高铁",
+    "路线", "自驾", "跟团", "自由行", "亲子游", "蜜月", "度假",
+    "目的地", "预算", "门票", "导游", "包车", "租车",
+]
+
 
 # ============ 意图检测 ============
 
@@ -29,18 +37,24 @@ def detect_intent(text: str, keywords: list[str]) -> bool:
 
 # ============ 槽位合并 ============
 
-def get_merged_requirement(user_input: str, memory) -> UserRequirement:
+def get_merged_requirement(user_input: str, context=None, memory=None) -> UserRequirement:
     """提取并合并槽位。
 
-    用户可能分多轮提供信息，每轮提取后与 memory 中已存的槽位合并。
-    本轮非空的字段覆盖已有字段。
+    用户可能分多轮提供信息，每轮提取后与 context（优先）或 memory 中已存的槽位合并。
+    本轮非空的字段覆盖已有字段。合并后的槽位会同时写回 context 和 memory（如有）。
     """
     new_req = slot_extractor.extract(user_input)
-    prev_req_dict = memory.retrieve("current_requirement") or {}
+
+    prev_req_dict = {}
+    if context is not None and hasattr(context, "get_slots"):
+        prev_req_dict = context.get_slots()
+    elif memory is not None:
+        prev_req_dict = memory.retrieve("current_requirement") or {}
 
     # 用户重新提供信息时，清除 reset 标记
     if new_req.destination or new_req.days or new_req.budget:
-        memory.store("reset_flag", False)
+        if memory is not None:
+            memory.store("reset_flag", False)
 
     merged = UserRequirement(
         destination=new_req.destination or prev_req_dict.get("destination"),
@@ -50,13 +64,18 @@ def get_merged_requirement(user_input: str, memory) -> UserRequirement:
         preferences=new_req.preferences or prev_req_dict.get("preferences"),
     )
 
-    memory.store("current_requirement", {
+    slots = {
         "destination": merged.destination,
         "days": merged.days,
         "budget": merged.budget,
         "budget_level": merged.budget_level,
         "preferences": merged.preferences,
-    })
+    }
+
+    if context is not None and hasattr(context, "set_slots"):
+        context.set_slots(slots)
+    if memory is not None:
+        memory.store("current_requirement", slots)
 
     return merged
 

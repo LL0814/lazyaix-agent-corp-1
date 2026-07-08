@@ -94,9 +94,45 @@ def geocode(address: str = "", location: str = "") -> dict | str | None:
 
 # ============ POI 搜索 ============
 
+def _parse_poi(p: dict, poi_type: str = "") -> POI:
+    """将高德 v5 POI 原始条目解析为 POI 对象。"""
+    loc = p.get("location", "")
+    lng, lat = 0.0, 0.0
+    if "," in loc:
+        parts = loc.split(",")
+        lng, lat = float(parts[0]), float(parts[1])
+
+    biz = p.get("business_rating", {}) or {}
+    rating = 0.0
+    try:
+        rating = float(biz.get("rating", 0))
+    except (ValueError, TypeError):
+        pass
+
+    photos = p.get("photos", []) or []
+    image_url = photos[0].get("url", "") if photos else ""
+    opentime = p.get("opentime", "") or ""
+
+    address = p.get("address") or ""
+    if not address:
+        address = (p.get("pname") or "") + (p.get("cityname") or "")
+
+    return POI(
+        name=p.get("name", ""),
+        address=address,
+        lng=lng,
+        lat=lat,
+        rating=rating,
+        open_time=opentime,
+        intro=p.get("tag", ""),
+        image_url=image_url,
+        poi_type=poi_type or p.get("tag", ""),
+    )
+
+
 def search_poi(city: str, poi_type: str = "", keyword: str = "",
                location: str = "", radius: int = 0, limit: int = 10) -> list[POI]:
-    """POI 搜索。
+    """POI 搜索（支持分页，确保返回足够数量）。
 
     同时支持关键词搜索和周边搜索：
       - 不传 location：按关键词在城市内搜索
@@ -119,11 +155,12 @@ def search_poi(city: str, poi_type: str = "", keyword: str = "",
         return []
 
     # 使用 v5 接口（支持更多字段，且 2024 起官方推荐）
+    size = min(limit, 25)  # v5 单次最多 25 条
     params: dict[str, Any] = {
         "key": key,
         "keywords": keyword or poi_type,
         "region": city,
-        "size": min(limit, 25),  # v5 单次最多 25 条
+        "size": size,
         "show_fields": "business_rating,photos,opentime",
     }
     # 周边搜索参数
@@ -134,52 +171,36 @@ def search_poi(city: str, poi_type: str = "", keyword: str = "",
     else:
         url = f"{AMAP_V5_BASE}/place/text"
 
-    resp = http_get(url, params)
-    if not _is_ok(resp):
-        logger.warning("search_poi 失败: city=%s keyword=%s", city, keyword)
-        return []
-
-    pois_data = resp.get("pois", [])
     result: list[POI] = []
-    for p in pois_data[:limit]:
-        # 解析坐标
-        loc = p.get("location", "")
-        lng, lat = 0.0, 0.0
-        if "," in loc:
-            parts = loc.split(",")
-            lng, lat = float(parts[0]), float(parts[1])
+    page = 1
+    total = 0
+    while len(result) < limit:
+        params["page"] = page
+        resp = http_get(url, params)
+        if not _is_ok(resp):
+            logger.warning("search_poi 失败: city=%s keyword=%s page=%d", city, keyword, page)
+            break
+        pois_data = resp.get("pois", [])
+        if not pois_data:
+            break
+        # 高德返回 count 表示总命中数，可用于判断是否还有更多页
+        if "count" in resp:
+            try:
+                total = int(resp["count"])
+            except (ValueError, TypeError):
+                total = 0
+        for p in pois_data:
+            if len(result) >= limit:
+                break
+            result.append(_parse_poi(p, poi_type))
+        # 已拿完全部结果
+        if total and len(result) >= total:
+            break
+        # 返回数量不足一页且没有 count 时，保守认为已到最后一页
+        if len(pois_data) < size and not total:
+            break
+        page += 1
 
-        # 解析评分（v5 接口 business_rating 字段）
-        biz = p.get("business_rating", {}) or {}
-        rating = 0.0
-        try:
-            rating = float(biz.get("rating", 0))
-        except (ValueError, TypeError):
-            pass
-
-        # 解析图片
-        photos = p.get("photos", []) or []
-        image_url = photos[0].get("url", "") if photos else ""
-
-        # 解析开放时间
-        opentime = p.get("opentime", "") or ""
-
-        # 拼接地址：优先 address，为空时用 pname+cityname
-        address = p.get("address") or ""
-        if not address:
-            address = (p.get("pname") or "") + (p.get("cityname") or "")
-
-        result.append(POI(
-            name=p.get("name", ""),
-            address=address,
-            lng=lng,
-            lat=lat,
-            rating=rating,
-            open_time=opentime,
-            intro=p.get("tag", ""),
-            image_url=image_url,
-            poi_type=poi_type or p.get("tag", ""),
-        ))
     return result
 
 

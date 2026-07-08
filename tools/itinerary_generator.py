@@ -78,9 +78,13 @@ def generate(destination: str,
     if not all_pois:
         logger.warning("目的地 %s 未找到景点", destination)
         all_pois = []
+    else:
+        logger.info("目的地 %s 获取到 %d 个景点，计划 %d 天", destination, len(all_pois), days)
 
     # ===== 2. 获取天气 =====
-    weathers = openmeteo_client.get_weather(city=destination, days=7)
+    # 天气天数覆盖行程天数，避免长行程后期没有天气数据
+    weather_days = min(max(days, 7), 16)
+    weathers = openmeteo_client.get_weather(city=destination, days=weather_days)
 
     # ===== 3. 获取住宿 =====
     # 优先调用百度 Place API（真实数据），失败时函数内部回退本地 JSON
@@ -95,12 +99,14 @@ def generate(destination: str,
     days_plan: list[dict] = []
     total_cost = {"accommodation": 0, "food": 0, "transport": 0, "tickets": 0}
 
+    # 景点不足时自动分配：优先保证覆盖全部天数
+    distributed = _distribute_pois(all_pois, days, POIS_PER_DAY)
+
     for day_idx in range(days):
         date = today + dt.timedelta(days=day_idx)
-        # 切片：本日景点
-        start = day_idx * POIS_PER_DAY
-        day_pois = all_pois[start:start + POIS_PER_DAY]
+        day_pois = distributed[day_idx]
         if not day_pois:
+            logger.warning("第 %d 天没有可用景点，停止生成后续天数", day_idx + 1)
             break
 
         # 5.1 贪心最近邻排序
@@ -167,7 +173,7 @@ def generate(destination: str,
     }
 
     # ===== 7. 注意事项 =====
-    notes = _build_notes(weathers, days_plan)
+    notes = _build_notes(weathers, days_plan, requested_days=days)
 
     return Itinerary(
         destination=destination,
@@ -238,7 +244,7 @@ def _build_timeline(pois: list[POI], routes: list[Route],
     return timeline
 
 
-def _build_notes(weathers, days_plan: list[dict]) -> list[str]:
+def _build_notes(weathers, days_plan: list[dict], requested_days: int = 0) -> list[str]:
     """根据天气和行程生成注意事项。"""
     notes: list[str] = []
     rainy_days = [w for w in weathers if "雨" in w.condition]
@@ -249,7 +255,49 @@ def _build_notes(weathers, days_plan: list[dict]) -> list[str]:
         notes.append("有低温天气，注意保暖")
     notes.append("景点门票价格为估算，实际以景区公告为准")
     notes.append("交通时间受实时路况影响，建议预留缓冲")
+    if requested_days and len(days_plan) < requested_days:
+        notes.append(f"目的地可用景点有限，实际行程按 {len(days_plan)} 天展示")
     return notes
+
+
+def _distribute_pois(all_pois: list[POI], days: int, pois_per_day: int) -> list[list[POI]]:
+    """将景点分配到每一天。
+
+    规则：
+      - 景点充足时，每天固定 pois_per_day 个。
+      - 景点不足但 >= 天数时，平均分配，每天至少 1 个。
+      - 景点极少时，循环复用已有景点，保证覆盖全部天数。
+    """
+    result: list[list[POI]] = []
+    total = len(all_pois)
+    if total == 0:
+        return [[] for _ in range(days)]
+
+    if total >= days * pois_per_day:
+        idx = 0
+        for _ in range(days):
+            result.append(all_pois[idx:idx + pois_per_day])
+            idx += pois_per_day
+        return result
+
+    if total >= days:
+        base, extra = divmod(total, days)
+        idx = 0
+        for i in range(days):
+            count = base + (1 if i < extra else 0)
+            result.append(all_pois[idx:idx + count])
+            idx += count
+        return result
+
+    # 景点极少：循环复用
+    idx = 0
+    for _ in range(days):
+        day_pois = []
+        for _ in range(pois_per_day):
+            day_pois.append(all_pois[idx % total])
+            idx += 1
+        result.append(day_pois)
+    return result
 
 
 # ============ 酒店与餐厅搜索 ============
