@@ -232,12 +232,12 @@ class Agent:
         return (
             "You are a supervisor agent. You can delegate tasks to two capabilities:\n"
             "- researcher: good at research, analysis, and summarization\n"
-            "- writer: good at writing, copywriting, and content generation\n\n"
+            "- writer: good at writing, copywriting, poetry, and content generation\n\n"
             "Based on the user's request, decide whether to answer directly or "
-            "delegate to one or more tasks. Follow these rules:\n"
+            "delegate to one or more tasks. Follow these rules strictly:\n"
             "- If the user asks for creative writing, an essay, a poem, a story, "
             "  or copywriting that does NOT require external facts or research, "
-            "  use ONLY the writer capability.\n"
+            "  you MUST delegate to the writer capability. Do NOT answer directly.\n"
             "- If the user asks for facts, research, analysis, or a summary of "
             "  information without asking for a written document, use ONLY the "
             "  researcher capability.\n"
@@ -245,12 +245,13 @@ class Agent:
             "  first use researcher to gather facts, then use writer to produce "
             "  the final document. The writer task should depend on the researcher "
             "  task.\n"
-            "- If the request is simple, answer directly.\n"
+            "- Only answer directly if the request is a simple greeting or casual "
+            "  chit-chat that does not require any creative or research work.\n"
             "- Tasks may run in parallel if they have no dependencies.\n\n"
             "Respond with a JSON object in one of these forms:\n"
             '{"action": "direct", "response": "your direct answer"}\n'
             'or\n'
-            '{"action": "delegate", "tasks": [{"task_id": "research_001", "task_type": "research", "target_capability": "researcher", "instructions": "...", "dependencies": [], "input_refs": [], "required_for_completion": true}, ...]}\n\n'
+            '{"action": "delegate", "tasks": [{"task_id": "writer_001", "task_type": "write", "target_capability": "writer", "instructions": "...", "dependencies": [], "input_refs": [], "required_for_completion": true}, ...]}\n\n'
             f"User request: {user_input}\n"
             "Decision:"
         )
@@ -425,16 +426,23 @@ class Agent:
         if not completed:
             return "[No tasks completed]"
 
-        # 如果只有一个必需的已完成任务，直接返回其结果。
+        # 始终标注使用了哪些子代理，避免依赖 LLM 自行提及。
         required_completed = [t for t in completed if t.required_for_completion]
+        agent_names = sorted({t.target_capability for t in required_completed})
+        prefix = (
+            f"I used the {' and '.join(agent_names)} subagent"
+            f"{'s' if len(agent_names) > 1 else ''} to help with this.\n\n"
+        )
+
         if len(required_completed) == 1:
-            return str(required_completed[0].result)
+            return prefix + str(required_completed[0].result)
 
         # 否则进行汇总。
         results = [
-            {"agent": t.target_capability, "result": t.result} for t in completed
+            {"agent": t.target_capability, "result": t.result}
+            for t in required_completed
         ]
-        return self._summarize(user_input, results, self.context.get(), self.memory)
+        return prefix + self._summarize(user_input, results, self.context.get(), self.memory)
 
     def _parse_plan(self, raw: str):
         """Parse the Supervisor planning JSON from raw LLM output.
@@ -553,10 +561,9 @@ class Agent:
             prompt += f"- [{item['agent']}] {item['result']}\n"
         prompt += (
             "\nPlease synthesize these results into a final, natural, and "
-            "helpful response for the user. Start your response by briefly "
-            "mentioning which subagents you used, for example: "
-            "'I used the researcher and writer subagents to help with this.' "
-            "Then provide the synthesized answer."
+            "helpful response for the user. Do NOT mention which subagents "
+            "were used; that will be added by the system. Just provide the "
+            "synthesized answer."
         )
         return self.model.complete(prompt)
 

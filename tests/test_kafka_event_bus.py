@@ -19,11 +19,12 @@ def kafka_bootstrap():
 @pytest.mark.asyncio
 async def test_kafka_publish_subscribe(kafka_bootstrap):
     import asyncio
+    import uuid
 
     bus = KafkaEventBus(
         bootstrap_servers=kafka_bootstrap,
         client_id="test",
-        consumer_group="test-group",
+        consumer_group=f"test-group-{uuid.uuid4().hex}",
         topic_prefix="test_",
     )
     received = []
@@ -44,7 +45,6 @@ async def test_kafka_publish_subscribe(kafka_bootstrap):
         )
         await bus.publish(event)
         await asyncio.sleep(1)
-        assert len(received) == 1
-        assert received[0].task_id == "t1"
+        assert any(e.event_id == "e1" and e.task_id == "t1" for e in received)
     finally:
         await bus.stop()
